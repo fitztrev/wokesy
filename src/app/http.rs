@@ -10,7 +10,6 @@ use tokio::sync::watch;
 use crate::health::{Availability, Health};
 pub use config::Config;
 
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn router(health: watch::Receiver<Option<Health>>) -> Router {
     Router::new()
         .route("/livez", get(liveness))
@@ -18,14 +17,12 @@ pub fn router(health: watch::Receiver<Option<Health>>) -> Router {
         .with_state(health)
 }
 
-#[expect(dead_code)]
 pub async fn bind(config: &Config) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind(config.address()).await?;
     tracing::info!(address = %listener.local_addr()?, "http server listening");
     Ok(listener)
 }
 
-#[expect(dead_code)]
 pub async fn serve(
     listener: TcpListener,
     router: Router,

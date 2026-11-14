@@ -37,9 +37,9 @@ Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is
 | `src/health/` | `keep_checking`: checks PagerDuty and Zulip on an interval and publishes `Health` |
 | `src/status/` | Posts startup, health changes, and shutdown to a per-instance topic |
 | `src/app/` | Config, telemetry, `/livez` and `/readyz`, `http_client()`, and wiring |
-| `deploy/` | Kubernetes resources in KCL |
-| `flake.nix` | Release build and container image |
-| `ci/`, `.github/` | Release hooks, pin check, workflows |
+| `deploy/` | Kubernetes resources in KCL: `wokesy/` is the typed workload, one `Deployment` that reads every setting from the Secret `wokesy`; `prod/main.k` pins the released version |
+| `flake.nix` | The release build and the layered container image (`wokesy`), and the `release` and `release-guards` commands |
+| `ci/`, `.github/` | Release hooks and the nixpkgs/rust-overlay pin check; the `Build`, `Release`, and `Deploy` workflows |
 
 ## Probes
 
@@ -54,7 +54,15 @@ Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is
 - `bacon` runs `check`, `clippy`, `test`, or `run`. Switch jobs with `c`, `t`, and `r`.
 - `run-on-zulip` runs wokesy with its secrets from secretspec. The first run prompts for missing secrets and saves them through your secretspec provider.
 - `devenv test` runs fmt, clippy (`-D warnings`), nextest, and the doc tests.
+- `render-manifests` prints the production Kubernetes YAML from KCL. Never hand-write YAML; change the KCL.
 
 Before handing work back, these must be clean: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo nextest run`, and `cargo test --doc`.
 
-Commit subjects on `main` are conventional commits.
+## Release and deploy
+
+- Commit subjects on `main` are conventional commits. `feat` asks for a minor bump, other types ask for a patch, and `!` or `BREAKING CHANGE:` asks for a major. Releases read the version from them.
+- `release` runs the shared `dull-nix` release command. It sets `[workspace.package]` version, renders `CHANGELOG.md`, tags `v*`, and pushes. Never edit the version or the changelog by hand.
+- The `Release` workflow publishes `ghcr.io/lichess-org/wokesy:<version>` (plus `latest` for stable releases) and creates the GitHub release. For stable releases, `Deploy` then pins `deploy/prod/main.k` to the new version.
+- `deploy <version>` re-pins production to a version that is already published.
+- `ci/nixpkgs-pin.sh` requires `flake.lock` and `devenv.lock` to agree on nixpkgs and rust-overlay, so dev, CI, and the container share a toolchain. Update both together. A git hook runs it when either lock file is committed.
+- Wokesy runs as exactly one replica, with the `Recreate` strategy. Two replicas would both announce and both answer.

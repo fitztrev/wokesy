@@ -6,16 +6,6 @@ impl ChatUserId {
     /// ```
     /// use wokesy::chat::ChatUserId;
     ///
-    /// assert_eq!(ChatUserId(17).mention(), "@**|17**");
-    /// ```
-    #[must_use]
-    pub fn mention(self) -> String {
-        format!("@**|{}**", self.0)
-    }
-
-    /// ```
-    /// use wokesy::chat::ChatUserId;
-    ///
     /// assert_eq!(ChatUserId(17).silent_mention(), "@_**|17**");
     /// ```
     #[must_use]

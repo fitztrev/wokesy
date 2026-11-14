@@ -37,7 +37,7 @@ impl Config {
     /// assert_eq!(unset.open_channels(&announcements), [announcements.clone()]);
     ///
     /// let set = Config {
-    ///     channels: "sysadmin, on-call".parse().unwrap(),
+    ///     channels: "sysadmin, on-call".into(),
     ///     ..Config::default()
     /// };
     /// assert_eq!(set.open_channels(&announcements), [channel("sysadmin"), channel("on-call")]);

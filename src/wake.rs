@@ -7,6 +7,6 @@ mod parsing;
 mod testing;
 
 pub use answering::keep_answering;
-pub use channels::{Channels, InvalidChannel};
+pub use channels::Channels;
 pub use commands::{Answer, Commands};
 pub use config::Config;

@@ -1,9 +1,11 @@
+mod api;
 mod config;
 mod escalation_policy;
 mod on_call;
 mod schedule;
 mod user;
 
+pub use api::{Api, ApiError};
 pub use config::{Config, EventsConfig};
 pub use escalation_policy::{
     EscalationLevel, EscalationPolicy, EscalationPolicyId, EscalationPolicyIdError,

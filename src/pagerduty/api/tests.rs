@@ -8,8 +8,7 @@ use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
 use super::*;
 use crate::pagerduty::{
     EscalationLevel, EscalationPolicy, EscalationPolicyId, EscalationPolicyName, EscalationRule,
-    OnCall, Override, OverrideId, ScheduleId, ScheduleName, ScheduleRef, Target, User, UserId,
-    UserRef,
+    OnCall, OverrideId, ScheduleId, ScheduleName, ScheduleRef, Target, User, UserId, UserRef,
 };
 use crate::people::{Email, Name};
 
@@ -89,10 +88,10 @@ async fn every_request_carries_the_token_and_asks_for_version_2() {
             "users": [],
             "escalation_policies": [],
             "oncalls": [],
-            "overrides": [],
+            "override": { "id": "PQ47DCP" },
             "more": false,
         })))
-        .expect(7);
+        .expect(6);
     let (_server, api) = pagerduty_answering(request).await;
     let rota = schedule_id("PI7DH85");
     let start = datetime!(2026-11-14 20:00 UTC);
@@ -102,7 +101,6 @@ async fn every_request_carries_the_token_and_asks_for_version_2() {
     api.users().await.unwrap();
     api.escalation_policies().await.unwrap();
     api.oncalls().await.unwrap();
-    api.schedule_overrides(&rota, start, end).await.unwrap();
     api.create_schedule_override(&rota, &user_id("PEYSGVF"), start, end)
         .await
         .unwrap();
@@ -289,45 +287,23 @@ async fn an_on_call_entry_without_a_schedule_or_an_end_is_a_directly_targeted_pe
     );
 }
 
-#[tokio::test]
-async fn the_overrides_of_a_schedule_are_asked_for_between_two_times_in_utc() {
-    let request = get("/schedules/PI7DH85/overrides")
-        .and(query_param("since", "2026-11-14T20:00:00Z"))
-        .and(query_param("until", "2026-11-14T20:01:00Z"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "overrides": [{
-                "id": "PQ47DCP",
-                "start": "2026-11-14T14:00:00-05:00",
-                "end": "2026-11-14T18:00:00-05:00",
-                "user": { "id": "PEYSGVF", "type": "user_reference", "summary": "Aurelio Rice" },
-            }],
-        })));
-    let (_server, api) = pagerduty_answering(request).await;
+fn create_override() -> MockBuilder {
+    Mock::given(method("POST")).and(path("/schedules/PI7DH85/overrides"))
+}
 
-    let overrides = api
-        .schedule_overrides(
-            &schedule_id("PI7DH85"),
-            datetime!(2026-11-14 21:00:00.25 +1),
-            datetime!(2026-11-14 21:01:00.25 +1),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        overrides,
-        [Override {
-            id: override_id("PQ47DCP"),
-            user: user_id("PEYSGVF"),
-            start: datetime!(2026-11-14 19:00 UTC),
-            end: datetime!(2026-11-14 23:00 UTC),
-        }]
-    );
+async fn created_override(api: &Api) -> Result<OverrideId, ApiError> {
+    api.create_schedule_override(
+        &schedule_id("PI7DH85"),
+        &user_id("PEYSGVF"),
+        datetime!(2026-11-14 21:00:00.25 +1),
+        datetime!(2026-11-15 01:00:00.25 +1),
+    )
+    .await
 }
 
 #[tokio::test]
-async fn an_override_is_created_for_a_user_between_two_times_in_utc_without_reading_the_answer() {
-    let request = Mock::given(method("POST"))
-        .and(path("/schedules/PI7DH85/overrides"))
+async fn an_override_is_created_for_a_user_between_two_times_in_utc() {
+    let request = create_override()
         .and(header(CONTENT_TYPE, "application/json"))
         .and(body_json(json!({
             "override": {
@@ -336,18 +312,73 @@ async fn an_override_is_created_for_a_user_between_two_times_in_utc_without_read
                 "user": { "id": "PEYSGVF", "type": "user_reference" },
             },
         })))
-        .respond_with(ResponseTemplate::new(201).set_body_string("created"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(json!({ "override": { "id": "PQ47DCP" } })),
+        )
         .expect(1);
     let (_server, api) = pagerduty_answering(request).await;
 
-    api.create_schedule_override(
-        &schedule_id("PI7DH85"),
-        &user_id("PEYSGVF"),
-        datetime!(2026-11-14 21:00:00.25 +1),
-        datetime!(2026-11-15 01:00:00.25 +1),
-    )
-    .await
-    .unwrap();
+    created_override(&api).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_id_of_a_created_override_is_read_from_either_shape_of_the_answer() {
+    for answer in [
+        json!({
+            "override": {
+                "id": "PQ47DCP",
+                "start": "2026-11-14T20:00:00Z",
+                "end": "2026-11-15T00:00:00Z",
+                "user": { "id": "PEYSGVF", "type": "user_reference", "summary": "Aurelio Rice" },
+            },
+        }),
+        json!([
+            {
+                "status": 201,
+                "override": {
+                    "id": "PQ47DCP",
+                    "start": "2026-11-14T20:00:00Z",
+                    "end": "2026-11-15T00:00:00Z",
+                    "user": { "id": "PEYSGVF", "type": "user_reference", "summary": "Aurelio Rice" },
+                },
+            },
+            { "status": 201, "override": { "id": "PZ99ZZZ" } },
+        ]),
+    ] {
+        let request =
+            create_override().respond_with(ResponseTemplate::new(201).set_body_json(&answer));
+        let (_server, api) = pagerduty_answering(request).await;
+
+        assert_eq!(
+            created_override(&api).await.unwrap(),
+            override_id("PQ47DCP"),
+            "{answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_created_override_whose_answer_carries_no_id_is_unreadable() {
+    for answer in [
+        json!({ "overrides": [{ "id": "PQ47DCP" }] }),
+        json!([{ "status": 400, "errors": ["Override must end after its start"] }]),
+        json!([]),
+    ] {
+        let request =
+            create_override().respond_with(ResponseTemplate::new(201).set_body_json(&answer));
+        let (_server, api) = pagerduty_answering(request).await;
+
+        assert!(
+            matches!(
+                created_override(&api).await,
+                Err(ApiError::Unreadable {
+                    status: StatusCode::CREATED,
+                    ..
+                })
+            ),
+            "{answer}"
+        );
+    }
 }
 
 #[tokio::test]

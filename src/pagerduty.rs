@@ -15,7 +15,7 @@ pub use escalation_policy::{
 pub use events::{Events, Summary, SummaryError};
 pub use on_call::OnCall;
 pub use schedule::{
-    Override, OverrideId, OverrideIdError, ScheduleId, ScheduleIdError, ScheduleName,
-    ScheduleNameError, ScheduleRef,
+    OverrideId, OverrideIdError, ScheduleId, ScheduleIdError, ScheduleName, ScheduleNameError,
+    ScheduleRef,
 };
 pub use user::{User, UserId, UserIdError, UserRef};

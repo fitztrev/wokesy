@@ -1,7 +1,4 @@
 use nutype::nutype;
-use time::OffsetDateTime;
-
-use super::user::UserId;
 
 #[nutype(
     validate(not_empty),
@@ -60,11 +57,3 @@ pub struct ScheduleRef {
     )
 )]
 pub struct OverrideId(String);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Override {
-    pub id: OverrideId,
-    pub user: UserId,
-    pub start: OffsetDateTime,
-    pub end: OffsetDateTime,
-}

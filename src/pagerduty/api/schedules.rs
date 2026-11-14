@@ -2,35 +2,12 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 
-use crate::pagerduty::{Override, OverrideId, ScheduleId, UserId};
+use crate::pagerduty::{OverrideId, ScheduleId, UserId};
 
 use super::{Api, ApiError, Reference, done, read};
 
 const SCHEDULES: &str = "schedules";
 const OVERRIDES: &str = "overrides";
-
-#[derive(Serialize)]
-struct Between {
-    #[serde(with = "time::serde::rfc3339")]
-    since: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    until: OffsetDateTime,
-}
-
-#[derive(Deserialize)]
-struct OverridesAnswer {
-    overrides: Vec<OverrideAnswer>,
-}
-
-#[derive(Deserialize)]
-struct OverrideAnswer {
-    id: OverrideId,
-    user: Reference<UserId>,
-    #[serde(with = "time::serde::rfc3339")]
-    start: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    end: OffsetDateTime,
-}
 
 #[derive(Serialize)]
 struct NewOverride<'a> {
@@ -60,42 +37,49 @@ enum ReferenceKind {
     User,
 }
 
-impl From<OverrideAnswer> for Override {
-    fn from(answer: OverrideAnswer) -> Self {
-        Self {
-            id: answer.id,
-            user: answer.user.id,
-            start: answer.start,
-            end: answer.end,
-        }
+#[derive(Deserialize)]
+#[serde(try_from = "CreatedAnswer")]
+struct Created(OverrideId);
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CreatedAnswer {
+    Alone(CreatedOverride),
+    Listed(Vec<CreatedOverride>),
+}
+
+#[derive(Deserialize)]
+struct CreatedOverride {
+    #[serde(rename = "override")]
+    created: Reference<OverrideId>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the answer lists no override")]
+struct NothingCreated;
+
+impl TryFrom<CreatedAnswer> for Created {
+    type Error = NothingCreated;
+
+    fn try_from(answer: CreatedAnswer) -> Result<Self, Self::Error> {
+        let first = match answer {
+            CreatedAnswer::Alone(only) => Some(only),
+            CreatedAnswer::Listed(listed) => listed.into_iter().next(),
+        };
+        first
+            .map(|answer| Self(answer.created.id))
+            .ok_or(NothingCreated)
     }
 }
 
 impl Api {
-    pub async fn schedule_overrides(
-        &self,
-        schedule: &ScheduleId,
-        since: OffsetDateTime,
-        until: OffsetDateTime,
-    ) -> Result<Vec<Override>, ApiError> {
-        let between = Between {
-            since: whole_seconds_in_utc(since),
-            until: whole_seconds_in_utc(until),
-        };
-        let request = self
-            .request(Method::GET, &[SCHEDULES, schedule, OVERRIDES])
-            .query(&between);
-        let answer: OverridesAnswer = read(request).await?;
-        Ok(answer.overrides.into_iter().map(Override::from).collect())
-    }
-
     pub async fn create_schedule_override(
         &self,
         schedule: &ScheduleId,
         user: &UserId,
         start: OffsetDateTime,
         end: OffsetDateTime,
-    ) -> Result<(), ApiError> {
+    ) -> Result<OverrideId, ApiError> {
         let new = NewOverride {
             shift: Shift {
                 start: whole_seconds_in_utc(start),
@@ -109,7 +93,8 @@ impl Api {
         let request = self
             .request(Method::POST, &[SCHEDULES, schedule, OVERRIDES])
             .json(&new);
-        done(request).await
+        let Created(id) = read(request).await?;
+        Ok(id)
     }
 
     pub async fn delete_schedule_override(

@@ -23,6 +23,30 @@
 
   scripts.run-on-zulip.exec = ''cd "$DEVENV_ROOT" && exec secretspec run -- cargo run'';
 
+  git-hooks.hooks.nixpkgs-pin = {
+    enable = true;
+    entry = "ci/nixpkgs-pin.sh";
+    files = "^(flake|devenv)\\.lock$";
+    pass_filenames = false;
+  };
+
+  scripts.render-manifests.exec = ''cd "$DEVENV_ROOT/deploy" && exec kcl run --quiet prod/main.k'';
+
+  scripts.release.exec = ''cd "$DEVENV_ROOT" && exec nix run "$DEVENV_ROOT#release" -- "$@"'';
+
+  scripts.deploy.exec = ''
+    set -eu
+    if [ $# -ne 1 ]; then
+      echo "usage: deploy <version>" >&2
+      exit 2
+    fi
+    version=''${1#v}
+    gh workflow run deploy.yml --repo lichess-org/wokesy -f version="$version"
+    echo "Requested a production deploy of $version. Follow it with:"
+    echo "  gh run list --repo lichess-org/wokesy --workflow deploy.yml"
+    echo "  gh run watch --repo lichess-org/wokesy"
+  '';
+
   enterTest = ''
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings

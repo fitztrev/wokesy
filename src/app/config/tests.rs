@@ -5,8 +5,9 @@ use secrecy::ExposeSecret;
 
 use super::*;
 use crate::app::telemetry::LogFormat;
-use crate::chat::ChatUserId;
+use crate::chat::{ChannelName, ChatUserId};
 use crate::people::{Email, Links};
+use crate::wake::Channels;
 
 #[expect(clippy::result_large_err)]
 fn in_clean_environment(test: impl FnOnce(&mut Jail)) {
@@ -45,6 +46,8 @@ fn with_only_the_required_variables_set_every_other_setting_takes_its_default() 
         assert_eq!(config.people.links, Links::default());
         assert_eq!(config.people.refresh_interval, Duration::from_mins(5));
         assert_eq!(config.wake.longest, Duration::from_hours(7 * 24));
+        assert_eq!(config.wake.channels, Channels::default());
+        assert_eq!(config.wake.page_cooldown, Duration::from_mins(5));
         assert!(config.status.is_none());
         assert_eq!(config.health.interval, Duration::from_secs(30));
         assert_eq!(config.health.timeout, Duration::from_secs(5));
@@ -87,6 +90,8 @@ fn every_variable_a_deployment_can_set_is_recognized() {
         jail.set_env("WOKESY_PEOPLE__LINKS", "alice@example.com=12");
         jail.set_env("WOKESY_PEOPLE__REFRESH_INTERVAL", "10m");
         jail.set_env("WOKESY_WAKE__LONGEST", "2d");
+        jail.set_env("WOKESY_WAKE__CHANNELS", "sysadmin, on-call");
+        jail.set_env("WOKESY_WAKE__PAGE_COOLDOWN", "10m");
         jail.set_env("WOKESY_STATUS__CHANNEL", "wokesy-status");
         jail.set_env("WOKESY_HEALTH__INTERVAL", "1m");
         jail.set_env("WOKESY_HEALTH__TIMEOUT", "10s");
@@ -102,6 +107,7 @@ fn every_variable_a_deployment_can_set_is_recognized() {
         assert_eq!(config.on_call.refresh_interval, Duration::from_secs(30));
         assert_eq!(config.people.refresh_interval, Duration::from_mins(10));
         assert_eq!(config.wake.longest, Duration::from_hours(2 * 24));
+        assert_eq!(config.wake.page_cooldown, Duration::from_mins(10));
         assert_eq!(config.status.unwrap().channel.as_str(), "wokesy-status");
         assert_eq!(config.health.interval, Duration::from_mins(1));
         assert_eq!(config.health.timeout, Duration::from_secs(10));
@@ -126,6 +132,8 @@ fn a_misspelled_variable_in_any_section_is_rejected() {
         "WOKESY_ON_CALL__REFRESH",
         "WOKESY_PEOPLE__LINK",
         "WOKESY_WAKE__LONGST",
+        "WOKESY_WAKE__CHANNEL",
+        "WOKESY_WAKE__COOLDOWN",
         "WOKESY_STATUS__CHANEL",
         "WOKESY_HEALTH__RETRYS",
         "WOKESY_TELEMETRY__FORMAT",
@@ -233,6 +241,60 @@ fn a_malformed_link_fails_loading() {
         in_clean_environment(|jail| {
             jail.set_env("WOKESY_PEOPLE__LINKS", links);
             assert!(load(jail).is_err(), "{links} was accepted");
+        });
+    }
+}
+
+fn channel(name: &str) -> ChannelName {
+    ChannelName::try_new(name).unwrap()
+}
+
+#[test]
+fn without_command_channels_only_the_announcements_channel_is_open() {
+    in_clean_environment(|jail| {
+        let config = load(jail).unwrap();
+        assert_eq!(
+            config.wake.open_channels(&config.announcements.channel),
+            [channel("sysadmin")]
+        );
+    });
+}
+
+#[test]
+fn command_channels_are_read_with_or_without_whitespace_between_them() {
+    for channels in ["ops, on-call", "ops,on-call", " ops ,, on-call, "] {
+        in_clean_environment(|jail| {
+            jail.set_env("WOKESY_WAKE__CHANNELS", channels);
+            let config = load(jail).unwrap();
+            assert_eq!(
+                config.wake.open_channels(&config.announcements.channel),
+                [channel("ops"), channel("on-call")],
+                "{channels}"
+            );
+        });
+    }
+}
+
+#[test]
+fn the_page_cooldown_is_read_as_a_duration_and_zero_is_allowed() {
+    for (cooldown, read) in [
+        ("90s", Duration::from_secs(90)),
+        ("1h", Duration::from_hours(1)),
+        ("0s", Duration::ZERO),
+    ] {
+        in_clean_environment(|jail| {
+            jail.set_env("WOKESY_WAKE__PAGE_COOLDOWN", cooldown);
+            assert_eq!(load(jail).unwrap().wake.page_cooldown, read, "{cooldown}");
+        });
+    }
+}
+
+#[test]
+fn a_page_cooldown_that_is_not_a_duration_fails_loading() {
+    for cooldown in ["soon", "5", "-5m"] {
+        in_clean_environment(|jail| {
+            jail.set_env("WOKESY_WAKE__PAGE_COOLDOWN", cooldown);
+            assert!(load(jail).is_err(), "{cooldown} was accepted");
         });
     }
 }

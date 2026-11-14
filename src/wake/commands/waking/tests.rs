@@ -157,7 +157,7 @@ async fn the_reply_tells_for_each_policy_whether_the_sender_is_first_in_line() {
         format!(
             ":alarm_clock: I'll wake you for anything until <time:{}>.\n\
              - **Fishnet**: I couldn't override **Fishnet rota**: pagerduty rejected the request (403 Forbidden): Forbidden\n\
-             - **Lichess**: you are first in line through **Primary rota**. Dave Example, Erin Example stay at level 1 too.\n\
+             - **Lichess**: you are first in line through **Primary rota**. Level 1 also pages Dave Example, Erin Example directly.\n\
              - **Moderation**: I can't put you first. Level 1 has no schedule to override.\n\
              - **Nobody yet**: I can't put you first. Level 1 has no schedule to override.\n\
              - **Tournaments**: you are first in line through **Tournament rota**.\n\
@@ -200,7 +200,7 @@ async fn a_policy_with_several_schedules_at_the_first_line_tells_which_were_over
     let line = reply.lines().nth(1).unwrap();
     assert_eq!(
         line,
-        "- **Lichess**: you are first in line through **Primary rota**, **Tournament rota**. Dave Example stay at level 1 too. I couldn't override **Fishnet rota**: pagerduty rejected the request (403 Forbidden): Forbidden"
+        "- **Lichess**: you are first in line through **Primary rota**, **Tournament rota**. Level 1 also pages Dave Example directly. I couldn't override **Fishnet rota**: pagerduty rejected the request (403 Forbidden): Forbidden"
     );
 }
 

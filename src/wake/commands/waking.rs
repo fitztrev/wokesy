@@ -156,7 +156,7 @@ fn outcome(schedules: &[ScheduleRef], people: &[UserRef], refusals: &Refusals) -
         if !people.is_empty() {
             let names: Vec<&str> = people.iter().map(|person| person.name.as_str()).collect();
             sentences.push(format!(
-                "{} stay at level 1 too.",
+                "Level 1 also pages {} directly.",
                 names.join(BETWEEN_NAMES)
             ));
         }

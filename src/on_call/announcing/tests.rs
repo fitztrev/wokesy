@@ -1,0 +1,379 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use time::macros::datetime;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+
+use super::*;
+use crate::chat::{ChannelName, DeliveryError, TopicName};
+use crate::on_call::Shift;
+use crate::on_call::testing::{directory, level, policy, roster, shift, user};
+
+const PATIENCE: Duration = Duration::from_mins(1);
+const A_LONG_TIME: Duration = Duration::from_hours(1);
+
+#[derive(Clone, Debug)]
+struct RecordingMessenger {
+    attempts: mpsc::UnboundedSender<Attempt>,
+    unreachable: Arc<AtomicBool>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Attempt {
+    to: Conversation,
+    markdown: String,
+    delivered: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("unreachable")]
+struct Unreachable;
+
+impl Messenger for RecordingMessenger {
+    fn send(
+        &self,
+        conversation: &Conversation,
+        message: &OutgoingMessage,
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send {
+        let delivered = !self.unreachable.load(Ordering::SeqCst);
+        self.attempts
+            .send(Attempt {
+                to: conversation.clone(),
+                markdown: message.markdown().to_owned(),
+                delivered,
+            })
+            .unwrap();
+        std::future::ready(if delivered {
+            Ok(())
+        } else {
+            Err(DeliveryError {
+                conversation: conversation.clone(),
+                cause: Box::new(Unreachable),
+            })
+        })
+    }
+}
+
+fn on_call_topic() -> Conversation {
+    Conversation::Topic {
+        channel: ChannelName::try_new("sysadmin").unwrap(),
+        topic: TopicName::try_new("on call").unwrap(),
+    }
+}
+
+fn alice() -> Shift {
+    shift(
+        user("PALICE1", "Alice Example"),
+        Some(datetime!(2026-11-14 20:00 UTC)),
+    )
+}
+
+fn bob() -> Shift {
+    shift(user("PBOB001", "Bob Example"), None)
+}
+
+fn carol() -> Shift {
+    shift(user("PCAROL1", "Carol Example"), None)
+}
+
+fn lichess(first_line: &[Shift], second_line: &[Shift]) -> Roster {
+    roster(&[policy(
+        "PLICHES",
+        "Lichess",
+        &[level(1, first_line), level(2, second_line)],
+    )])
+}
+
+fn alice_and_bob_in_chat() -> Directory {
+    directory(&[(&alice().user, 12), (&bob().user, 13)])
+}
+
+struct Announcing {
+    task: JoinHandle<()>,
+    roster: watch::Sender<Option<Roster>>,
+    directory: watch::Sender<Option<Directory>>,
+    attempts: mpsc::UnboundedReceiver<Attempt>,
+    unreachable: Arc<AtomicBool>,
+}
+
+impl Announcing {
+    fn start(roster: Option<Roster>, directory: Option<Directory>) -> Self {
+        let (attempted, attempts) = mpsc::unbounded_channel();
+        let unreachable = Arc::new(AtomicBool::new(false));
+        let messenger = RecordingMessenger {
+            attempts: attempted,
+            unreachable: Arc::clone(&unreachable),
+        };
+        let (roster, rosters) = watch::channel(roster);
+        let (directory, directories) = watch::channel(directory);
+        let task = tokio::spawn(keep_announcing(
+            messenger,
+            on_call_topic(),
+            rosters,
+            directories,
+        ));
+        Self {
+            task,
+            roster,
+            directory,
+            attempts,
+            unreachable,
+        }
+    }
+
+    fn knowing_everyone(roster: Roster) -> Self {
+        Self::start(Some(roster), Some(alice_and_bob_in_chat()))
+    }
+
+    fn becomes(&self, roster: Roster) {
+        self.roster.send_replace(Some(roster));
+    }
+
+    async fn next_attempt(&mut self) -> Attempt {
+        tokio::time::timeout(PATIENCE, self.attempts.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn next_announcement(&mut self) -> String {
+        let attempt = self.next_attempt().await;
+        assert!(attempt.delivered, "{attempt:?}");
+        attempt.markdown
+    }
+
+    async fn announces_nothing(&mut self) {
+        tokio::time::sleep(A_LONG_TIME).await;
+        assert_eq!(self.attempts.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+impl Drop for Announcing {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_announcement_is_who_is_on_call_now_in_the_given_conversation() {
+    let now = lichess(&[alice()], &[bob(), carol()]);
+    let mut announcing = Announcing::knowing_everyone(now.clone());
+
+    assert_eq!(
+        announcing.next_attempt().await,
+        Attempt {
+            to: on_call_topic(),
+            markdown: on_call_now(&now, &alice_and_bob_in_chat()),
+            delivered: true,
+        }
+    );
+    announcing.announces_nothing().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn nothing_is_announced_until_people_are_matched() {
+    let mut announcing = Announcing::start(Some(lichess(&[alice()], &[])), None);
+    announcing.announces_nothing().await;
+
+    announcing
+        .directory
+        .send_replace(Some(alice_and_bob_in_chat()));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call now**
+- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z>
+- **Lichess**, level 2: :warning: nobody"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn nothing_is_announced_until_the_roster_is_read() {
+    let mut announcing = Announcing::start(None, Some(alice_and_bob_in_chat()));
+    announcing.announces_nothing().await;
+
+    announcing.becomes(lichess(&[], &[carol()]));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call now**
+- **Lichess**, level 1: :warning: nobody
+- **Lichess**, level 2: Carol Example"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_later_change_announces_only_the_levels_that_changed() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[bob()], &[carol()]));
+    announcing.next_announcement().await;
+
+    announcing.becomes(lichess(&[alice()], &[carol()]));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call changed**
+- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z> (was @_**|13**)"
+    );
+    announcing.announces_nothing().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_change_is_announced_against_the_roster_announced_before_it() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[bob()], &[]));
+    announcing.next_announcement().await;
+
+    announcing.becomes(lichess(&[bob()], &[carol()]));
+    announcing.next_announcement().await;
+    announcing.becomes(lichess(&[bob()], &[alice()]));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call changed**
+- **Lichess**, level 2: @_**|12** until <time:2026-11-14T20:00:00Z> (was Carol Example)"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_roster_with_the_same_people_on_call_announces_nothing() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[bob()]));
+    announcing.next_announcement().await;
+    let later = Shift {
+        ends: Some(datetime!(2026-11-15 08:00 UTC)),
+        ..alice()
+    };
+
+    announcing.becomes(lichess(std::slice::from_ref(&later), &[bob()]));
+    announcing.announces_nothing().await;
+    announcing.becomes(lichess(&[later], &[carol()]));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call changed**
+- **Lichess**, level 2: Carol Example (was @_**|13**)"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_is_announced_with_the_people_matched_by_then() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[]));
+    announcing.next_announcement().await;
+
+    announcing
+        .directory
+        .send_replace(Some(directory(&[(&alice().user, 12), (&carol().user, 14)])));
+    announcing.announces_nothing().await;
+    announcing.becomes(lichess(&[carol()], &[]));
+
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call changed**
+- **Lichess**, level 1: @_**|14** (was @_**|12**)"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_delivery_is_tried_again_after_thirty_seconds_with_the_roster_as_it_is_then() {
+    let first = lichess(&[alice()], &[]);
+    let second = lichess(&[bob()], &[]);
+    let mut announcing = Announcing::knowing_everyone(first.clone());
+    announcing.unreachable.store(true, Ordering::SeqCst);
+
+    let failed = announcing.next_attempt().await;
+    let failed_at = Instant::now();
+    announcing.becomes(second.clone());
+    announcing.unreachable.store(false, Ordering::SeqCst);
+    let retried = announcing.next_attempt().await;
+
+    assert_eq!(
+        failed,
+        Attempt {
+            to: on_call_topic(),
+            markdown: on_call_now(&first, &alice_and_bob_in_chat()),
+            delivered: false,
+        }
+    );
+    assert_eq!(
+        retried,
+        Attempt {
+            to: on_call_topic(),
+            markdown: on_call_now(&second, &alice_and_bob_in_chat()),
+            delivered: true,
+        }
+    );
+    assert_eq!(failed_at.elapsed(), Duration::from_secs(30));
+    announcing.announces_nothing().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_roster_counts_as_announced_only_once_its_announcement_was_delivered() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[]));
+    announcing.next_announcement().await;
+
+    announcing.unreachable.store(true, Ordering::SeqCst);
+    announcing.becomes(lichess(&[bob()], &[]));
+    let failed = announcing.next_attempt().await;
+    announcing.becomes(lichess(&[carol()], &[]));
+    announcing.unreachable.store(false, Ordering::SeqCst);
+
+    assert!(!failed.delivered);
+    assert_eq!(
+        announcing.next_announcement().await,
+        "\
+:pager: **On call changed**
+- **Lichess**, level 1: Carol Example (was @_**|12**)"
+    );
+    announcing.announces_nothing().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_undone_before_the_retry_announces_nothing() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[]));
+    announcing.next_announcement().await;
+
+    announcing.unreachable.store(true, Ordering::SeqCst);
+    announcing.becomes(lichess(&[bob()], &[]));
+    announcing.next_attempt().await;
+    announcing.becomes(lichess(&[alice()], &[]));
+
+    announcing.announces_nothing().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn announcing_ends_once_the_roster_is_no_longer_published() {
+    let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[]));
+    announcing.next_announcement().await;
+
+    announcing.roster = watch::channel(None).0;
+
+    assert!(
+        tokio::time::timeout(PATIENCE, &mut announcing.task)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn announcing_ends_when_people_will_never_be_matched() {
+    let mut announcing = Announcing::start(Some(lichess(&[alice()], &[])), None);
+
+    announcing.directory = watch::channel(None).0;
+
+    assert!(
+        tokio::time::timeout(PATIENCE, &mut announcing.task)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        announcing.attempts.try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+}

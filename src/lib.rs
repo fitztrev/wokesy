@@ -1,2 +1,8 @@
 pub mod chat;
+pub mod health;
+pub mod on_call;
+pub mod pagerduty;
 pub mod people;
+pub mod status;
+pub mod wake;
+pub mod zulip;

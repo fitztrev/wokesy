@@ -305,3 +305,6 @@ async fn shutdown_requested() -> Signal {
     tracing::info!(signal = %received, "shutdown requested");
     received
 }
+
+#[cfg(test)]
+mod tests;

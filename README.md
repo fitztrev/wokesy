@@ -1,44 +1,69 @@
 # Wokesy
 
-Wokesy is a Zulip bot that manages who is on call in PagerDuty. It announces in a Zulip topic who is on call and when that changes, and it lets people page whoever is on call, or put themselves first in line for a few hours, by sending it a message. PagerDuty stays the source of truth: wokesy has no database, and everything it changes lives in PagerDuty.
+Wokesy is a Zulip bot that manages who is on call in PagerDuty. It announces in a Zulip topic who is on call and when that changes, and it lets people page whoever is on call, or put themselves first in line for a few hours, by mentioning it in a channel. PagerDuty stays the source of truth: wokesy has no database, and everything it changes lives in PagerDuty.
 
 ## What it does
 
-To give wokesy a command, send it a direct message, or mention it in a channel message. Wokesy sees every public channel. To use it in a private channel, subscribe the bot to that channel. Commands are not case-sensitive, and a `.`, `!`, or `?` at the end is ignored.
+To give wokesy a command, start a channel message with a mention of it, in a channel where it takes commands:
 
-- **On-call announcements.** Wokesy reads who is on call from PagerDuty every minute. When it starts, it posts the whole roster once in the on-call topic: one line for each level of each escalation policy, with the time each shift ends. That first post notifies nobody. After that, it posts only when the set of people on call at some level changes, and only the levels that changed:
+```
+@**Wokesy** who is on call
+```
+
+Wokesy answers in the same topic. Commands are not case-sensitive, and a `.`, `!`, or `?` at the end is ignored.
+
+**Commands work only in the open.** Wokesy takes commands only in the channels listed in `WOKESY_WAKE__CHANNELS`. If that is not set, it takes them only in the channel of the on-call announcements. It never takes a command by direct message, so the team sees every page and every change. To a direct message, or a mention in another channel, it answers `I only take commands in the open, in #sysadmin. Mention me there.` with the channels it does use, and it does nothing else. Wokesy sees every public channel. To use it in a private channel, subscribe the bot to that channel.
+
+**Nobody is ever pinged.** Wherever wokesy names a person, it uses a silent mention: Zulip shows the name, and notifies nobody. The people on call already know their schedule, and PagerDuty is what wakes them. A person whom wokesy cannot find in Zulip is shown by their PagerDuty name.
+
+- **On-call announcements.** Wokesy reads who is on call from PagerDuty every minute, and again at once after a command that changes it. When it starts, it posts the whole roster once in the on-call topic: one line for each level of each escalation policy, with the time each shift ends. After that, it posts only when the set of people on call at some level changes, and only the levels that changed. Zulip shows it like this:
 
   ```
   On call changed
-  - Infrastructure, level 1: @Alice until 20:00 (was Bob)
+  - Infrastructure, level 1: Alice until 20:00 (was Bob)
   ```
 
-  Someone who is newly on call at a level gets a real mention, so Zulip notifies them. People who were already on call at that level, and the people listed after `was`, are mentioned silently. A shift that only gets a new end time is not a change. A person whom wokesy cannot find in Zulip is shown by their PagerDuty name. Times are shown to each reader in their own time zone.
+  A shift that only gets a new end time is not a change. A level with nobody on call says `nobody`, with a warning sign. Times are shown to each reader in their own time zone.
 
-- **`page example.com is down`** alerts whoever is on call, through PagerDuty. Anyone who can message the bot can use it, and they do not need a PagerDuty account. The text after `page` becomes the alert, with the sender's name in front. The alert follows the escalation rules of the PagerDuty service as they stand at that moment, including any override. Every page is its own alert. Wokesy answers `Paged. PagerDuty is alerting whoever is on call.` and adds who is on call now, when it knows. It never says who exactly was alerted, because it does not know which service the alert goes to. Every page is also posted in the on-call topic, with a silent mention of the person who sent it. `page` works even while wokesy cannot read the rest of PagerDuty. If paging is not set up, or PagerDuty refuses the alert, wokesy says so and tells the sender to use PagerDuty directly.
+- **`page example.com is down`** alerts whoever PagerDuty has on call. Anyone in a channel where wokesy takes commands can use it, and they do not need a PagerDuty account. A page cannot be aimed at a person: the text after `page` is only what the alert says, with the sender's name in front, and PagerDuty decides who gets it. The alert follows the escalation rules of the PagerDuty service as they stand at that moment, including any override. Every page is its own alert.
 
-- **`wake me for 4 hours`** puts the sender first in line for that long. Wokesy creates a PagerDuty schedule override for the sender, from now until the time is up, on every schedule at level 1 of every escalation policy. Later levels are not touched. PagerDuty ends the override by itself and hands the shift back to the schedule, even if wokesy is not running then. The reply has one line for each escalation policy. It says where the sender is now first in line, and where wokesy could not do it: for example, when level 1 of a policy has no schedule, only people. The on-call topic then shows the change.
+  Wokesy answers `Paged. PagerDuty is alerting whoever is on call.` and adds who is on call now, when it knows. It never says who exactly was alerted, because it does not know which service the alert goes to. Every page is also repeated in the on-call topic, with a silent mention of the person who sent it and their text as a quote, unless the page was sent in that topic itself.
+
+  After a page, wokesy refuses to page again for 5 minutes, whoever asks. It says who paged, how long ago, and how long it will wait, and it sends nothing to PagerDuty. PagerDuty keeps escalating the first alert until someone acknowledges it. Only a page that PagerDuty accepted starts this wait. To change it, set `WOKESY_WAKE__PAGE_COOLDOWN`; `0s` turns it off. Wokesy forgets the last page when it restarts.
+
+  `page` works even while wokesy cannot read the rest of PagerDuty. If paging is not set up, or PagerDuty refuses the alert, wokesy says so and tells the sender to use PagerDuty directly.
+
+- **`wake me for 4 hours`** puts the sender first in line for that long. Wokesy creates a PagerDuty schedule override for the sender, from now until the time is up, on every schedule at level 1 of every escalation policy. Later levels are not touched. PagerDuty ends the override by itself and hands the shift back to the schedule, even if wokesy is not running then. The reply has one line for each escalation policy. It says where the sender is now first in line, and where wokesy could not do it: for example, when level 1 of a policy has no schedule, only people. When level 1 of a policy also names people directly, the reply says that level 1 also pages them. The on-call topic then shows the change.
 
   The duration is a whole number and a unit: minutes (`m`, `min`, `mins`, `minute`, `minutes`), hours (`h`, `hr`, `hrs`, `hour`, `hours`), or days (`d`, `day`, `days`). `a` and `an` mean one. Several amounts are added together, and other words are ignored. All of these work: `wake me for 4 hours`, `wake me 4h`, `wake me for 90 minutes`, `wake me for 1h30m`, `wake me for 1 hour 30 minutes`, `wake me for an hour`, `wake me for anything in the next 4 hours`.
 
   The longest time wokesy sets is 7 days. For longer, it tells the sender to ask for less or to change the schedule in PagerDuty. To change the limit, set `WOKESY_WAKE__LONGEST`.
 
-- **`stop waking me`** ends that early. Wokesy deletes every override of the sender that is in effect on a level 1 schedule. It cannot tell its own overrides from ones made in PagerDuty, so it ends those too.
+- **`stop waking me`** ends that early. Wokesy deletes the overrides that it made for the sender with `wake me`, and the schedule decides again. Any message whose first word is `stop` does the same.
 
-- **`who is on call`** shows the same roster as the first announcement, and notifies nobody. `who`, `on call`, `oncall`, and `status` do the same.
+- **`back to defaults`** ends every override that wokesy made, for whoever it made them, so every schedule it touched is back to what PagerDuty would do without wokesy. Only a sender whom wokesy can match to a PagerDuty user may do this. A message that starts with `reset` or `back to`, or that has the word `default` or `defaults` in it, does the same.
+
+- **`who is on call`** shows the same roster as the first announcement. `on call`, `oncall`, `status`, and any message that starts with `who` do the same.
 
 - **`help`** lists the commands.
 
 - **Status posts.** If `WOKESY_STATUS__CHANNEL` is set, wokesy posts in that channel when it starts, when it cannot use PagerDuty and when PagerDuty works again, and when it shuts down. Each run of wokesy posts in a topic of its own. A post about PagerDuty says whether wokesy will keep trying or whether a person must fix it, such as a revoked key. Without that channel, these messages are only logged.
 
-`wake me` and `stop waking me` work only for a sender wokesy can match to a PagerDuty user. See [How people are matched](#how-people-are-matched).
+`wake me` and `back to defaults` work only for a sender wokesy can match to a PagerDuty user. See [How people are matched](#how-people-are-matched). Right after it starts, wokesy answers `I'm still reading PagerDuty. Try again in a minute.` to `wake me`, `stop waking me`, `back to defaults`, and `who is on call`, until it has read who is on call and matched the people. `page` and `help` never wait for that.
+
+### Wokesy only ends overrides it made itself
+
+`stop waking me` and `back to defaults` never touch an override that a person entered in PagerDuty, such as a planned swap or holiday cover. PagerDuty has no way to mark an override, so wokesy remembers the ones it creates, and it ends only those.
+
+It remembers them in memory. After a restart it has forgotten them, and it can no longer end them early: `stop waking me` then answers that it has no override of the sender on record. They still end on time, because PagerDuty ends them. To end one sooner, remove it in PagerDuty.
 
 ## What it does not do
 
-- **It never edits a schedule or an escalation policy.** The only things wokesy changes in PagerDuty are schedule overrides, which it creates and deletes, and the alerts it triggers for `page`.
-- **It keeps nothing between restarts.** After a restart, wokesy reads everything from PagerDuty and Zulip again and posts the whole roster again. An override made with `wake me` is not lost, because PagerDuty holds it.
+- **It never edits a schedule or an escalation policy.** The only things wokesy changes in PagerDuty are schedule overrides that it creates itself and later deletes, and the alerts it triggers for `page`.
+- **It keeps nothing between restarts.** After a restart, wokesy reads everything from PagerDuty and Zulip again and posts the whole roster again. An override made with `wake me` is not lost, because PagerDuty holds it, but wokesy no longer knows that it made it. The wait after a page starts from nothing too.
 - **It ignores escalation policies that no service uses.** Only a policy used by at least one PagerDuty service appears in the roster and gets overrides.
 - **It does not decide who is paged.** `page` triggers an alert on one PagerDuty service, and PagerDuty does the rest.
+- **It does not notify anyone in Zulip.** Every mention it writes is silent, and a page is repeated as a quote, where Zulip silences mentions too.
 
 ## Set it up
 
@@ -53,6 +78,7 @@ To give wokesy a command, send it a direct message, or mention it in a channel m
 1. Create a bot of the type **Generic bot**. Other bot types do not work.
 2. Set `WOKESY_ZULIP__SITE` to the URL of your Zulip organization, and `WOKESY_ZULIP__EMAIL` and `WOKESY_ZULIP__API_KEY` to the email address and the API key of the bot.
 3. Set `WOKESY_ANNOUNCEMENTS__CHANNEL` to the channel for the on-call announcements. The topic is `on call` unless you set `WOKESY_ANNOUNCEMENTS__TOPIC`. If the channel is private, subscribe the bot to it.
+4. Wokesy takes commands in that channel. To choose other channels, set `WOKESY_WAKE__CHANNELS` to their names, separated by commas: `sysadmin, on-call`. Spaces around a name are allowed. When it is set, the announcements channel takes commands only if it is in the list.
 
 ### How people are matched
 
@@ -62,7 +88,9 @@ Wokesy has to know which Zulip user a PagerDuty user is, to mention them and to 
 2. The one Zulip member who has that email address.
 3. The one Zulip member who has the same full name, in any case.
 
-If none gives an answer, or two Zulip members fit, the person is not matched. Announcements then show their PagerDuty name without a mention, and they cannot use `wake me` or `stop waking me`. They can still use `page`. Only active Zulip members who are not bots are matched. Wokesy reads both lists again every 5 minutes.
+If none gives an answer, or two Zulip members fit, the person is not matched. Announcements then show their PagerDuty name without a mention, and they cannot use `wake me` or `back to defaults`. They can still use `page` and `who is on call`. Only active Zulip members who are not bots are matched. Wokesy reads both lists again every 5 minutes.
+
+Wokesy can match by email address only where the bot may see a member's real address. If your Zulip organization hides the addresses from it, people are matched by name, or by a link.
 
 `WOKESY_PEOPLE__LINKS` is one line of `email=zulip_user_id` pairs, separated by commas. Spaces are allowed:
 
@@ -76,6 +104,8 @@ The email address is the person's address in PagerDuty. The number is their Zuli
 
 Every setting is an environment variable. Durations are written like `30s`, `5m`, `1h`, or `7d`. The variables marked as secret are declared in `secretspec.toml`.
 
+A value made only of digits is read as a number, and `true` and `false` are read as booleans. So a channel name or a topic name cannot be all digits, unless you write it in double quotes, as in `WOKESY_ANNOUNCEMENTS__CHANNEL='"2026"'`. Wokesy does not start with a variable it does not know under `WOKESY_`, so a misspelled name is caught at once.
+
 | Variable | Default | Secret | What it sets |
 | --- | --- | --- | --- |
 | `WOKESY_ZULIP__SITE` | required | yes | URL of the Zulip organization |
@@ -86,13 +116,15 @@ Every setting is an environment variable. Durations are written like `30s`, `5m`
 | `WOKESY_PAGERDUTY__TOKEN` | required | yes | PagerDuty REST API key, not read-only |
 | `WOKESY_PAGERDUTY__BASE_URL` | `https://api.pagerduty.com/` | | PagerDuty REST API. EU accounts use `https://api.eu.pagerduty.com/` |
 | `WOKESY_PAGERDUTY__EVENTS__ROUTING_KEY` | not set: paging is off | yes | Integration key of the Events API V2 integration that `page` alerts |
-| `WOKESY_PAGERDUTY__EVENTS__URL` | `https://events.pagerduty.com/` | | PagerDuty Events API. EU accounts use `https://events.eu.pagerduty.com/`. Set it only together with the routing key |
+| `WOKESY_PAGERDUTY__EVENTS__URL` | `https://events.pagerduty.com/` | | PagerDuty Events API. EU accounts use `https://events.eu.pagerduty.com/`. Set it only together with the routing key: wokesy does not start with the URL alone |
 | `WOKESY_ANNOUNCEMENTS__CHANNEL` | required | yes | Channel for the on-call announcements and the pages |
 | `WOKESY_ANNOUNCEMENTS__TOPIC` | `on call` | yes | Topic in that channel |
 | `WOKESY_ON_CALL__REFRESH_INTERVAL` | `1m` | | How often wokesy reads who is on call |
 | `WOKESY_PEOPLE__LINKS` | empty | yes | Links from PagerDuty email addresses to Zulip user IDs |
 | `WOKESY_PEOPLE__REFRESH_INTERVAL` | `5m` | | How often wokesy reads the PagerDuty users and the Zulip members |
+| `WOKESY_WAKE__CHANNELS` | empty: only the announcements channel | yes | Channels where wokesy takes commands, separated by commas |
 | `WOKESY_WAKE__LONGEST` | `7d` | | Longest time `wake me` may set |
+| `WOKESY_WAKE__PAGE_COOLDOWN` | `5m` | | How long wokesy refuses to page again after a page. `0s` turns the wait off |
 | `WOKESY_STATUS__CHANNEL` | not set: status is only logged | yes | Channel for the status posts |
 | `WOKESY_HEALTH__INTERVAL` | `30s` | | How often wokesy checks that PagerDuty and Zulip work |
 | `WOKESY_HEALTH__TIMEOUT` | `5s` | | How long one check may take |
@@ -103,6 +135,7 @@ Every setting is an environment variable. Durations are written like `30s`, `5m`
 | `WOKESY_TELEMETRY__LOG_FORMAT` | `json` | | `json` or `pretty` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set: nothing is exported | yes | URL of an OpenTelemetry (OTLP) collector |
 | `OTEL_EXPORTER_OTLP_HEADERS` | not set | yes | Headers for the collector, such as its credentials |
+| `RUST_LOG` | `info,wokesy=debug` | | Which log lines are written, in the syntax of `tracing`'s `EnvFilter` |
 
 ## Run it on your machine
 
@@ -128,15 +161,21 @@ On the first run, `run-on-zulip` asks you for the secrets that wokesy cannot sta
 secretspec set WOKESY_PAGERDUTY__EVENTS__ROUTING_KEY
 ```
 
+To stop it, press Ctrl-C. Wokesy stops reading messages, finishes the command it is working on, and exits.
+
 To check the formatting and the lint rules, and to run the tests:
 
 ```sh
 devenv test
 ```
 
+The tests need no PagerDuty account and no Zulip organization. They run wokesy against small local servers that answer as PagerDuty and Zulip do.
+
 ## Deploy it
 
-Wokesy runs as one container in Kubernetes. The image is `ghcr.io/lichess-org/wokesy:<version>`. It listens on port 8080 and answers `/livez` and `/readyz`. `/readyz` answers 200 only while wokesy can use PagerDuty.
+Wokesy runs as one container in Kubernetes. The image is `ghcr.io/lichess-org/wokesy:<version>`. It listens on port 8080 and answers `/livez` and `/readyz`. `/livez` answers 200 while wokesy runs. `/readyz` answers 200 only while wokesy can use PagerDuty, and 503 until its first check of PagerDuty is done.
+
+Wokesy keeps running while PagerDuty or Zulip cannot be reached: it logs the failure and tries again. If one of its own tasks stops, the process exits with an error, and Kubernetes starts it again. On `SIGTERM` or `SIGINT` it stops reading messages, finishes the command it is working on for at most 10 seconds, posts that it is shutting down, and exits.
 
 Wokesy reads every setting from one Kubernetes Secret named `wokesy`. Put the settings that are not secret in it too, if you change them. Create the Secret in the namespace where wokesy will run:
 
@@ -148,11 +187,12 @@ kubectl create secret generic wokesy \
   --from-literal=WOKESY_PAGERDUTY__TOKEN=the-pagerduty-rest-api-key \
   --from-literal=WOKESY_PAGERDUTY__EVENTS__ROUTING_KEY=the-integration-key \
   --from-literal=WOKESY_ANNOUNCEMENTS__CHANNEL=sysadmin \
+  --from-literal='WOKESY_WAKE__CHANNELS=sysadmin, on-call' \
   --from-literal=WOKESY_STATUS__CHANNEL=bot-status \
   --from-literal='WOKESY_PEOPLE__LINKS=alice@example.com=12, bob@example.com=34'
 ```
 
-Leave out the lines that you do not need. Only the first four and the announcements channel are required.
+Leave out the lines that you do not need. Only the first four and the announcements channel are required. Without the routing key, `page` is off.
 
 The Kubernetes resources are written in KCL, in `deploy/`. Inside `devenv shell`, `render-manifests` prints them as YAML: one Deployment, which runs the version that `deploy/prod/main.k` pins.
 

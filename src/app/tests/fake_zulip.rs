@@ -112,13 +112,6 @@ impl FakeZulip {
         self.posts_where(move |to| *to == conversation)
     }
 
-    pub fn posts_in_channel(&self, name: &str) -> Posts {
-        let name = name.to_owned();
-        self.posts_where(
-            move |to| matches!(to, Conversation::Topic { channel, .. } if channel.as_str() == name),
-        )
-    }
-
     pub fn posts_it_never_answered(&self) -> Posts {
         Posts {
             posted: self.organization.never_answered.subscribe(),

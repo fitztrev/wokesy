@@ -27,7 +27,7 @@ const KUBERNETES_GRACE_PERIOD: Duration = Duration::from_secs(30);
 const LONGEST_TELEMETRY_SHUTDOWN: Duration = Duration::from_secs(10);
 const ROUTING_KEY: &str = "samplekeyhere";
 const SYSADMIN: &str = "sysadmin";
-const STATUS: &str = "wokesy status";
+const STATUS: &str = "bot-status";
 
 struct Wokesy {
     pagerduty: FakePagerDuty,
@@ -70,6 +70,13 @@ fn on_call_topic() -> Conversation {
 
 fn incident_topic() -> Conversation {
     topic("incident")
+}
+
+fn status_topic() -> Conversation {
+    Conversation::Topic {
+        channel: channel(STATUS),
+        topic: TopicName::try_new("wokesy status").unwrap(),
+    }
 }
 
 fn settings(pagerduty: &FakePagerDuty, zulip: &FakeZulip) -> Config {
@@ -170,7 +177,7 @@ impl Wokesy {
     }
 
     async fn once_settled(self) -> Self {
-        let mut status = self.zulip.posts_in_channel(STATUS);
+        let mut status = self.zulip.posts_in(status_topic());
         self.zulip.posts_in(on_call_topic()).next().await;
         status.next().await;
         status.next().await;
@@ -439,12 +446,12 @@ async fn every_request_to_pagerduty_and_zulip_says_it_comes_from_wokesy() {
 #[tokio::test]
 async fn readyz_answers_200_once_pagerduty_was_found_available() {
     let wokesy = Wokesy::start().await;
-    let mut status = wokesy.zulip.posts_in_channel(STATUS);
+    let mut status = wokesy.zulip.posts_in(status_topic());
 
     assert!(status.next().await.starts_with(concat!(
         ":rocket: wokesy v",
         env!("CARGO_PKG_VERSION"),
-        " started"
+        " started as "
     )));
     assert_eq!(status.next().await, ":check: PagerDuty works");
     assert_eq!(wokesy.probe("/readyz").await, StatusCode::OK);
@@ -459,10 +466,7 @@ async fn a_requested_shutdown_is_posted_and_ends_without_an_error() {
 
     let last = zulip.posted().pop().unwrap();
     assert!(outcome.is_ok(), "{outcome:?}");
-    assert!(
-        matches!(&last.to, Conversation::Topic { channel, .. } if channel.as_str() == STATUS),
-        "{last:?}"
-    );
+    assert_eq!(last.to, status_topic());
     assert!(
         last.markdown
             .starts_with(":octagonal_sign: Shutting down (SIGTERM) after "),

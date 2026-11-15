@@ -13,7 +13,7 @@ People give a command by mentioning the bot under the name you gave it.
 
 - **On-call announcements.** Set `WOKESY_ANNOUNCEMENTS__CHANNEL` to the channel for the [on-call announcements](announcements.md#on-call-announcements). The topic is `on call` unless you set `WOKESY_ANNOUNCEMENTS__TOPIC`.
 - **Commands.** Wokesy takes [commands](commands.md#commands-work-only-in-the-open) in the announcements channel. To choose other channels, set `WOKESY_WAKE__CHANNELS` to their names, separated by commas: `sysadmin, on-call`. Spaces around a name are allowed. When it is set, the announcements channel takes commands only if it is in the list.
-- **Status.** To get the [status posts](announcements.md#status-posts), set `WOKESY_STATUS__CHANNEL`.
+- **Status.** To get the [status posts](announcements.md#status-posts), set `WOKESY_STATUS__CHANNEL`. The topic is always `wokesy status`.
 
 A channel name must match the name in Zulip exactly, including upper and lower case.
 

@@ -14,7 +14,7 @@ The second command shows the log of the pod that ran before the last restart.
 | You see | Likely cause | Where to look |
 | --- | --- | --- |
 | The pod restarts in a loop | A required setting is missing, or a variable is misspelled. Or Kubernetes adds `WOKESY_` variables for a Service, because [`enableServiceLinks`](deploy.md#the-deployment) is not `false`. | The first lines of the previous pod's log. They name the setting. |
-| The pod never becomes Ready | PagerDuty refuses the key, because it is wrong, revoked, or for the other [region](pagerduty.md#what-to-set-up). Or PagerDuty cannot be reached. | The log and the [status posts](announcements.md#status-posts). They say whether wokesy will keep trying or a person must fix it. |
+| The pod never becomes Ready | PagerDuty refuses the key, because it is wrong, revoked, or for the other [region](pagerduty.md#what-to-set-up). Or PagerDuty cannot be reached. | The log and the [status posts](announcements.md#status-posts) in the topic `wokesy status`. They say whether wokesy will keep trying or a person must fix it. |
 | No `On call now` post | The name of the announcements channel is wrong, or the bot cannot post there. | The log: `on-call announcement delivery failed`, with Zulip's reason. |
 | No reply to a mention | The message did not [start with the mention](commands.md#how-to-give-a-command), the bot is not a Generic bot, or the bot cannot see the channel. | The log: `zulip request failed`, with the wait before the next try. |
 | Every post and every reply comes twice | Two copies of wokesy run. | [Run exactly one replica](deploy.md#run-exactly-one-replica). |

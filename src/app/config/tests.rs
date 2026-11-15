@@ -160,7 +160,7 @@ fn a_misspelled_variable_in_any_section_is_rejected() {
 }
 
 #[test]
-fn the_status_topic_cannot_be_configured_because_each_instance_names_its_own() {
+fn the_status_topic_cannot_be_configured_because_every_run_posts_in_wokesy_status() {
     in_clean_environment(|jail| {
         jail.set_env("WOKESY_STATUS__CHANNEL", "wokesy-status");
         jail.set_env("WOKESY_STATUS__TOPIC", "wokesy");

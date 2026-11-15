@@ -111,7 +111,7 @@ kubectl -n wokesy rollout status deployment/wokesy
 kubectl -n wokesy logs deployment/wokesy -f
 ```
 
-The pod turns Ready once the first check of PagerDuty passes. The status channel, if you set one, gets the start post and `PagerDuty works`. If not, see [Troubleshooting](troubleshooting.md).
+The pod turns Ready once the first check of PagerDuty passes. The topic `wokesy status` in the status channel, if you set one, gets the start post and `PagerDuty works`. If not, see [Troubleshooting](troubleshooting.md).
 
 1. **The on-call topic.** It has a post that starts with `On call now:` and names the people whom PagerDuty would alert first. Open the `schedule` block under that line: it has the real roster, level by level. The people are shown under their Zulip names. Nobody got a notification. This shows that the PagerDuty key works.
 2. **The log.** It has a line for each person matched, with the ids and the rule. You must be among them. Whoever is missing needs a [link](zulip.md#links).

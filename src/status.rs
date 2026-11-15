@@ -1,13 +1,13 @@
 mod config;
 
 use std::fmt;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::chat::{Conversation, Messenger, OutgoingMessage, TopicName, TopicNameError};
+use crate::chat::{Conversation, Messenger, OutgoingMessage, TopicName};
 use crate::health::{Availability, Health, Recovery, Unavailable};
 
 pub use config::Config;
@@ -67,29 +67,25 @@ pub struct Status<M> {
 }
 
 impl<M: Messenger> Status<M> {
-    pub fn new(messenger: M, config: Option<Config>) -> Result<Self, TopicNameError> {
-        let instance = InstanceId::generate();
-        let conversation = config
-            .map(|config| {
-                Ok(Conversation::Topic {
-                    channel: config.channel,
-                    topic: topic_for(instance, SystemTime::now())?,
-                })
-            })
-            .transpose()?;
-        Ok(Self {
+    #[must_use]
+    pub fn new(messenger: M, config: Option<Config>) -> Self {
+        Self {
             messenger,
-            instance,
-            conversation,
+            instance: InstanceId::generate(),
+            conversation: config.map(|config| Conversation::Topic {
+                channel: config.channel,
+                topic: status_topic(),
+            }),
             started: Instant::now(),
             pagerduty: None,
-        })
+        }
     }
 
     pub async fn started(&self) {
         tracing::info!(instance = %self.instance, conversation = ?self.conversation, "wokesy started");
         self.post(format!(
-            ":rocket: wokesy v{VERSION} started — [changelog]({REPOSITORY}/releases/tag/v{VERSION})"
+            ":rocket: wokesy v{VERSION} started as {instance} — [changelog]({REPOSITORY}/releases/tag/v{VERSION})",
+            instance = self.instance
         ))
         .await;
     }
@@ -171,12 +167,9 @@ fn change(before: Option<&Availability>, after: &Availability) -> Option<String>
     }
 }
 
-fn topic_for(instance: InstanceId, started: SystemTime) -> Result<TopicName, TopicNameError> {
-    let timestamp = humantime::format_rfc3339_seconds(started).to_string();
-    let date = timestamp
-        .split_once('T')
-        .map_or(timestamp.as_str(), |(date, _)| date);
-    TopicName::try_new(format!("v{VERSION} {instance} {date}"))
+#[expect(clippy::expect_used)]
+fn status_topic() -> TopicName {
+    TopicName::try_new("wokesy status").expect("static topic name is valid")
 }
 
 #[cfg(test)]

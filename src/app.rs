@@ -67,7 +67,7 @@ async fn run_until(
 ) -> anyhow::Result<()> {
     let http = http_client()?;
     let messenger = ZulipMessenger::new(http.clone(), &config.zulip);
-    let mut status = Status::new(messenger.clone(), config.status.clone())?;
+    let mut status = Status::new(messenger.clone(), config.status.clone());
     let (health, checked) = watch::channel(None);
 
     let mut probes = Probes::serve(listener, checked.clone());

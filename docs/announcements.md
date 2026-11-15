@@ -64,14 +64,14 @@ Every [`page`](commands.md#page) is repeated in the on-call topic.
 
 ## Status posts
 
-If `WOKESY_STATUS__CHANNEL` is set, wokesy posts in that channel:
+If `WOKESY_STATUS__CHANNEL` is set, wokesy posts in the topic `wokesy status` of that channel:
 
-- when it starts, with its version and a link to the changelog;
+- when it starts, with its version, an id of the run, and a link to the changelog;
 - when PagerDuty works for the first time, when wokesy cannot use PagerDuty, and when PagerDuty works again;
 - when it shuts down, with the reason and how long it ran.
 
 A post about PagerDuty says whether wokesy will keep trying or whether a person must fix it, such as a revoked key. Wokesy posts when that changes, not at every check.
 
-Each run of wokesy posts in a topic of its own, named after the version, an id of the run, and the date. The topic cannot be set. A quiet channel for bots suits these posts best.
+Every run of wokesy posts in that one topic, so the topic holds the history of all runs. The topic cannot be set. Wokesy gives each run a new id, and the start post and the log name it. A quiet channel for bots suits these posts best.
 
 Without that channel, these messages are only logged.

@@ -36,7 +36,7 @@ The variables marked as secret are declared in `secretspec.toml`.
 | `WOKESY_WAKE__CHANNELS` | empty: only the announcements channel | yes | Channels where wokesy takes commands, separated by commas |
 | `WOKESY_WAKE__LONGEST` | `7d` | | Longest time `wake me` may set |
 | `WOKESY_WAKE__PAGE_COOLDOWN` | `5m` | | How long wokesy refuses to page again after a page. `0s` turns the wait off |
-| `WOKESY_STATUS__CHANNEL` | not set: status is only logged | yes | Channel for the status posts |
+| `WOKESY_STATUS__CHANNEL` | not set: status is only logged | yes | Channel for the status posts. Wokesy posts them in the topic `wokesy status`, which has no setting |
 | `WOKESY_HEALTH__INTERVAL` | `30s` | | How often wokesy checks that PagerDuty and Zulip work |
 | `WOKESY_HEALTH__TIMEOUT` | `5s` | | How long one check may take |
 | `WOKESY_HEALTH__RETRIES` | `2` | | How many times a failed check is tried again before the service counts as unavailable |

@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
 use crate::on_call::Roster;
@@ -26,6 +28,14 @@ fn whole_second(time: OffsetDateTime) -> OffsetDateTime {
 async fn did_nothing(answering: &Answering) {
     assert_eq!(answering.requests().await, Vec::<String>::new());
     assert!(!answering.was_asked_to_refresh().await);
+}
+
+async fn answers_an_override(answering: &Answering, overrides: &str, answer: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path(overrides))
+        .respond_with(answer)
+        .mount(&answering.pagerduty)
+        .await;
 }
 
 fn woken_until(created: &Value, lines: &[&str]) -> String {
@@ -186,6 +196,101 @@ async fn when_no_override_could_be_created_the_reply_promises_nothing() {
              - `PSPARE1`: I couldn't override it: {FORBIDDEN}"
         )
     );
+}
+
+#[tokio::test]
+async fn an_override_whose_answer_was_lost_or_unreadable_may_exist_and_the_reply_says_so() {
+    for (answer, error) in [
+        (
+            ResponseTemplate::new(500),
+            "pagerduty rejected the request (500 Internal Server Error): Internal Server Error",
+        ),
+        (
+            ResponseTemplate::new(502).set_body_string("<html>bad gateway</html>"),
+            "pagerduty rejected the request (502 Bad Gateway): Bad Gateway",
+        ),
+        (
+            ResponseTemplate::new(201).set_body_json(json!({ "overrides": [] })),
+            "pagerduty answered 201 Created with a body of an unexpected shape",
+        ),
+        (
+            ResponseTemplate::new(200).set_body_string("ok"),
+            "pagerduty answered 200 OK with a body of an unexpected shape",
+        ),
+    ] {
+        let mut answering = Setup::waking_on_both_rotas().start().await;
+        answers_an_override(&answering, FISHNET_OVERRIDES, answer).await;
+        answering
+            .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+            .await;
+
+        let reply = answering
+            .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+            .await;
+
+        let created = answering.posted().await;
+        assert_eq!(
+            reply,
+            woken_until(
+                &created[0],
+                &[
+                    &format!(
+                        "- **Fishnet rota**: I couldn't confirm the override: {error}. It may exist; check PagerDuty."
+                    ),
+                    "- **Primary rota**: you are on it. It is level 1 of **Lichess**.",
+                ]
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_override_that_pagerduty_never_answered_may_exist_and_the_reply_says_so() {
+    let mut answering = Setup::default().start().await;
+    let never = ResponseTemplate::new(201).set_delay(Duration::from_hours(1));
+    answers_an_override(&answering, PRIMARY_OVERRIDES, never).await;
+    tokio::time::pause();
+
+    let reply = answering
+        .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+        .await;
+
+    assert_eq!(
+        reply,
+        ":warning: I couldn't put you on any schedule.\n\
+         - **Primary rota**: I couldn't confirm the override: pagerduty request failed. It may exist; check PagerDuty."
+    );
+}
+
+#[tokio::test]
+async fn an_override_that_pagerduty_refused_with_a_client_error_does_not_exist() {
+    for (status, error) in [
+        (
+            400,
+            "pagerduty rejected the request (400 Bad Request): Bad Request",
+        ),
+        (
+            404,
+            "pagerduty rejected the request (404 Not Found): Not Found",
+        ),
+        (
+            429,
+            "pagerduty rejected the request (429 Too Many Requests): Too Many Requests",
+        ),
+    ] {
+        let mut answering = Setup::default().start().await;
+        answers_an_override(&answering, PRIMARY_OVERRIDES, ResponseTemplate::new(status)).await;
+
+        assert_eq!(
+            answering
+                .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+                .await,
+            format!(
+                ":warning: I couldn't put you on any schedule.\n\
+                 - **Primary rota**: I couldn't override it: {error}"
+            )
+        );
+    }
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ use super::own_overrides::{OwnOverride, WakeSchedule};
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, time_tag};
 use crate::on_call::{Level, Policy, Roster, name_in_chat, policy_in_chat};
-use crate::pagerduty::{ScheduleId, ScheduleName, UserId};
+use crate::pagerduty::{ApiError, ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
 
 const FOR_HOW_LONG: &str = "For how long? For example: `wake me for 4 hours`.";
@@ -84,7 +84,13 @@ impl Commands {
                 }
                 Err(error) => {
                     tracing::warn!(schedule = %id, user = %user.id, error = %error, cause = ?std::error::Error::source(&error), "could not create an override");
-                    format!("I couldn't override it: {error}")
+                    if certainly_refused(&error) {
+                        format!("I couldn't override it: {error}")
+                    } else {
+                        format!(
+                            "I couldn't confirm the override: {error}. It may exist; check PagerDuty."
+                        )
+                    }
                 }
             };
             lines.push(format!("- {}: {outcome}", schedule.in_chat()));
@@ -92,6 +98,10 @@ impl Commands {
         self.refresh.notify_one();
         woken(on_some_schedule.then_some(stint.ends), lines)
     }
+}
+
+fn certainly_refused(error: &ApiError) -> bool {
+    matches!(error, ApiError::Rejected { status, .. } if status.is_client_error())
 }
 
 fn woken(until: Option<OffsetDateTime>, lines: Vec<String>) -> String {

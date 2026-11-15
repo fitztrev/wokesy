@@ -102,15 +102,19 @@ fn addressed(bot: &Bot, Delivery { message, flags }: Delivery) -> Option<Incomin
         Place::Stream {
             display_recipient,
             subject,
-        } => flags.contains(&Flag::Mentioned).then(|| {
-            (
-                Conversation::Topic {
-                    channel: display_recipient,
-                    topic: subject,
-                },
-                CommandText::new(without_mention(bot, &message.content)),
-            )
-        }),
+        } => flags
+            .contains(&Flag::Mentioned)
+            .then(|| after_own_mention(bot, &message.content))
+            .flatten()
+            .map(|command| {
+                (
+                    Conversation::Topic {
+                        channel: display_recipient,
+                        topic: subject,
+                    },
+                    CommandText::new(command),
+                )
+            }),
     }?;
     Some(IncomingMessage {
         id: message.id,
@@ -121,7 +125,7 @@ fn addressed(bot: &Bot, Delivery { message, flags }: Delivery) -> Option<Incomin
     })
 }
 
-fn without_mention<'a>(bot: &Bot, content: &'a str) -> &'a str {
+fn after_own_mention<'a>(bot: &Bot, content: &'a str) -> Option<&'a str> {
     let content = content.trim_start();
     let name = bot.full_name.as_str();
     let mention = format!("@**{name}**");
@@ -129,7 +133,6 @@ fn without_mention<'a>(bot: &Bot, content: &'a str) -> &'a str {
     content
         .strip_prefix(mention.as_str())
         .or_else(|| content.strip_prefix(mention_with_id.as_str()))
-        .unwrap_or(content)
 }
 
 #[cfg(test)]

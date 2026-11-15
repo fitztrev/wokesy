@@ -285,6 +285,61 @@ async fn a_mention_that_names_the_bot_by_id_is_stripped_too() {
 }
 
 #[tokio::test]
+async fn a_channel_message_that_mentions_the_bot_after_its_start_is_ignored() {
+    let (zulip, mut received) = FakeZulip::start().await;
+
+    zulip.deliver(json!([
+        channel_message(
+            1,
+            ALICE,
+            "Page @**Wokesy** if it is urgent, not me",
+            &["mentioned"]
+        ),
+        channel_message(
+            2,
+            ALICE,
+            "@**Bob Example** ask @**Wokesy|99** who is on call",
+            &["mentioned"]
+        ),
+        channel_message(3, ALICE, "> @**Wokesy** page db is down", &["mentioned"]),
+        channel_message(4, ALICE, " \n @**Wokesy** help", &["mentioned"]),
+    ]));
+
+    assert_eq!(
+        within_a_while(received.recv()).await,
+        received_from(4, ALICE, outage_topic(), "help")
+    );
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_mention_of_a_group_the_bot_belongs_to_or_of_everyone_is_ignored() {
+    let (zulip, mut received) = FakeZulip::start().await;
+
+    zulip.deliver(json!([
+        channel_message(
+            1,
+            ALICE,
+            "@*sysadmins* page lichess.org is down",
+            &["mentioned"]
+        ),
+        channel_message(
+            2,
+            ALICE,
+            "@**all** page lichess.org is down",
+            &["mentioned", "wildcard_mentioned"]
+        ),
+        channel_message(3, ALICE, "@**Wokesy** who is on call", &["mentioned"]),
+    ]));
+
+    assert_eq!(
+        within_a_while(received.recv()).await.text.as_str(),
+        "who is on call"
+    );
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn messages_not_addressed_to_the_bot_alone_are_ignored() {
     let (zulip, mut received) = FakeZulip::start().await;
 

@@ -36,6 +36,8 @@ Infrastructure · Level 1
 - was: nobody
 ```
 
+This post is also how wokesy confirms `wake me`, `stop waking me`, and `back to defaults`. Wokesy answers those commands with [a check mark](commands.md#a-check-mark-instead-of-a-reply) on the sender's message and no reply, so the sender finds the result here, in the on-call topic. When the command did not change the set of people on call, wokesy posts nothing here, and the check mark is the only sign.
+
 ### The first line
 
 - **Who is named.** PagerDuty skips a level that has nobody on call. So for each escalation policy, wokesy names the people at the first level that has anybody. In the roster above, that is level 2. Wokesy names a person once, even when several policies would alert them first.

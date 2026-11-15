@@ -23,7 +23,7 @@ Start a channel message with a mention of wokesy, in a channel where it takes co
 @**Wokesy** who is on call
 ```
 
-Wokesy answers in the same topic.
+Wokesy answers in the same topic. After a command that changed who is on call, it answers with [a check mark](#a-check-mark-instead-of-a-reply) on the message, and not with a reply.
 
 - The mention must be the first thing in the message. Wokesy ignores a message that mentions it later on, such as `Page @**Wokesy** if it is urgent`, and a message that mentions only a group it belongs to, or everyone.
 - Commands are not case-sensitive, and a `.`, `!`, or `?` at the end is ignored.
@@ -50,6 +50,16 @@ Until wokesy has read who is on call and has matched the people, it answers `I'm
 ## One command at a time
 
 Wokesy answers one command at a time. It waits at most 10 seconds for PagerDuty to create or delete one override or custom shift, so a slow PagerDuty cannot hold up a `page` for long.
+
+## A check mark instead of a reply
+
+When `wake me`, `stop waking me`, or `back to defaults` went through without a problem, wokesy posts no reply. It adds a check mark to the sender's message, as a reaction. It then reads PagerDuty again at once and posts `On call changed` in the on-call topic, and that post confirms the change. The on-call topic may be a different topic from the one that the sender wrote in.
+
+Wokesy posts `On call changed` only when the set of people on call at some level changes. When the command leaves that set as it was, there is no such post, and the check mark is the only sign. That happens when the sender of `wake me` was already the only person on call at level 1, and when `stop waking me` or `back to defaults` ends an override that a person had already removed in PagerDuty.
+
+Each command below says when it gets the check mark. Wokesy still answers everything else with a message: a question, a refusal, a failure, and every reply that the sender has to read.
+
+If Zulip does not take the check mark, wokesy posts the reply as a message, so the sender always gets one of the two.
 
 ## `page`
 
@@ -125,21 +135,26 @@ The longest time wokesy sets is 7 days. To change the limit, set `WOKESY_WAKE__L
 
 ### The reply
 
-In the usual case, which the list below spells out, the reply is one line. It names the sender, repeats the duration in words, and counts the people on call at each level behind level 1 as backup:
+In the usual case, which the list below spells out, the sender is then the only person on call at level 1. Wokesy adds [a check mark](#a-check-mark-instead-of-a-reply) to the sender's message and posts no reply. `On call changed` in the on-call topic names the sender.
+
+When other people are on call at level 1 too, wokesy replies in one line. The line names the sender, repeats the duration in words, counts those other people, and counts the people on call at each level behind level 1 as backup:
 
 ```
-Alice is now on call for 4 hours. Level 2 (3 people) and Level 3 (3 people) are backup.
+Alice is now on call for 4 hours, together with 5 others at level 1. Level 2 (3 people) is backup.
 ```
 
-| Wokesy replies | When |
+Wokesy always posts this line, because it warns the sender that PagerDuty alerts all of those people at once.
+
+| Wokesy answers | When |
 | --- | --- |
-| `Alice is now on call for 1 hour 30 minutes. Level 2 (1 person) is backup.` | Alice is the only person on call at level 1. |
-| `Alice is now on call for 4 hours.` | Nobody is on call at a level behind level 1. A level with nobody on call is never counted as backup. |
-| `Alice is now on call for 4 hours, together with 5 others at level 1. Level 2 (3 people) is backup.` | Other people are on call at level 1, so PagerDuty alerts all of them at once. For one other person, the reply says `together with 1 other at level 1`. |
+| A check mark on the sender's message | The sender is the only person on call at level 1. |
+| `Alice is now on call for 4 hours, together with 5 others at level 1. Level 2 (3 people) is backup.` | Other people are on call at level 1. For one other person, the reply says `together with 1 other at level 1`. |
+| `Alice is now on call for 4 hours, together with 5 others at level 1.` | Nobody is on call at a level behind level 1. A level with nobody on call is never counted as backup. |
+| `Alice is now on call for 4 hours. Level 2 (3 people) is backup.` | The sender is the only person on call at level 1, and Zulip did not take the check mark. |
 
 Wokesy counts those other people from the roster that it read before the command. On a shift-based schedule, they are everyone else who is on call at level 1, because the sender is added alongside them. On a legacy schedule, the sender replaces whoever was scheduled, so they are only the other people whom level 1 names directly.
 
-Wokesy gives the one-line reply only when all of this holds:
+Wokesy answers with the check mark or with the one line only when all of this holds:
 
 - It put the sender on every schedule in `WOKESY_WAKE__SCHEDULES`.
 - Its roster has exactly one escalation policy, and every one of those schedules is at level 1 of that policy.
@@ -176,10 +191,11 @@ After `I couldn't confirm`, wokesy does not know whether the override or the shi
 
 `stop waking me` ends early what `wake me` started. Wokesy deletes the overrides and the custom shifts that it made for the sender, and the schedule decides again. Any message whose first word is `stop` does the same.
 
-| Wokesy replies | When |
+| Wokesy answers | When |
 | --- | --- |
-| `Ended your override on Primary rota. The schedule decides again.` or the same with `your shift` | It ended them. An override or a shift that is already gone from PagerDuty counts as ended. |
-| `I couldn't end your override on Primary rota: …` or the same with `your shift` | PagerDuty failed. Wokesy keeps its record, so the sender can try again. |
+| [A check mark](#a-check-mark-instead-of-a-reply) on the sender's message | It ended everything that it had on record for the sender. An override or a shift that is already gone from PagerDuty counts as ended. |
+| `I couldn't end your override on Primary rota: …` or the same with `your shift` | PagerDuty failed. Wokesy keeps its record, so the sender can try again. Above that line, the reply says `Ended your override on …` or `Ended your shift on …` for what it did end. |
+| `Ended your override on Primary rota. The schedule decides again.` or the same with `your shift`, and nothing else | It ended everything, and Zulip did not take the check mark. |
 | `I have no override or shift of yours on record. …` | Wokesy made none for the sender, or theirs have ended, or [wokesy has restarted](#wokesy-only-ends-what-it-made-itself). |
 
 ## `back to defaults`
@@ -188,17 +204,22 @@ After `I couldn't confirm`, wokesy does not know whether the override or the shi
 
 A message that starts with `reset` or `back to` does the same. So does any other message that has the word `default` or `defaults` in it, unless it starts as another command. Leave that word out of a message to wokesy unless you mean it.
 
-The reply has one line for each schedule. Zulip shows it like this:
+When wokesy ended everything that it had on record, it adds [a check mark](#a-check-mark-instead-of-a-reply) to the sender's message and posts no reply. `On call changed` in the on-call topic shows who is on call again.
+
+When PagerDuty failed to end one of them, wokesy replies with one line for each schedule. Zulip shows the reply like this:
 
 ```
 Back to the defaults.
 - Primary rota: ended the override of Alice Example.
-- Night rota: ended the shift of Alice Example, Bob Example.
+- Night rota: ended the shift of Alice Example. I couldn't end the shift of Bob Example: pagerduty rejected the request (500 Internal Server Error): Internal Server Error
 PagerDuty's own schedules and overrides decide again.
 ```
 
-| Wokesy replies | When |
+If Zulip does not take the check mark, wokesy posts the same reply, with only the lines of what it ended.
+
+| Wokesy answers | When |
 | --- | --- |
+| A check mark on the sender's message | It ended every override and every custom shift that it had on record. One that is already gone from PagerDuty counts as ended. |
 | `I don't know which PagerDuty user you are. …` | Wokesy cannot match the sender to a PagerDuty user. |
 | `Nothing to undo: I have no override or shift of mine on record. …` | Wokesy made none, or they have ended, or [wokesy has restarted](#wokesy-only-ends-what-it-made-itself). |
 | `I couldn't end the override of Alice Example: …` on the line of a schedule | PagerDuty failed. Wokesy keeps its record, so the sender can try again. |

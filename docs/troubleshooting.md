@@ -18,6 +18,9 @@ The second command shows the log of the pod that ran before the last restart.
 | No `On call now` post | The name of the announcements channel is wrong, or the bot cannot post there. | The log: `on-call announcement delivery failed`, with Zulip's reason. |
 | No reply to a mention | The message did not [start with the mention](commands.md#how-to-give-a-command), the bot is not a Generic bot, or the bot cannot see the channel. | The log: `zulip request failed`, with the wait before the next try. |
 | Every post and every reply comes twice | Two copies of wokesy run. | [Run exactly one replica](deploy.md#run-exactly-one-replica). |
+| A check mark on `wake me`, `stop waking me`, or `back to defaults`, and no reply | Nothing is wrong. The command went through, and `On call changed` in the on-call topic confirms it. | [A check mark instead of a reply](commands.md#a-check-mark-instead-of-a-reply). |
+| A check mark, and no `On call changed` | Nothing is wrong, if the command did not change the set of people on call. Otherwise wokesy could not read PagerDuty again, or Zulip did not take the announcement. | `who is on call`, and the log: `keeping the previous roster` or `on-call announcement delivery failed`. |
+| A reply to `wake me`, `stop waking me`, or `back to defaults` that went through, where you expected a check mark | Zulip did not take the check mark, so wokesy posted the reply. | The log: `acknowledgement failed, so the answer is sent as a message`, with Zulip's reason. |
 
 ## A reply you did not expect
 
@@ -29,7 +32,7 @@ The second command shows the log of the pod that ran before the last restart.
 | `Waking is not set up here. …` | `WOKESY_WAKE__SCHEDULES` is missing. | The Secret. |
 | `Paging is not set up here. …` | `WOKESY_PAGERDUTY__EVENTS__ROUTING_KEY` is missing. | The Secret. |
 | `I couldn't page: …` | PagerDuty refused the alert, or cannot be reached. The routing key may be wrong, or `WOKESY_PAGERDUTY__EVENTS__URL` may be missing for an EU account. | The reply has PagerDuty's reason. |
-| `Paged. PagerDuty is alerting whoever is on call.`, or a reply to `wake me` with a line for each schedule, where you expected one line with names | Nothing is wrong. Wokesy names people after `Paged`, and answers `wake me` in one line, only when it shows exactly one escalation policy. [`page`](commands.md#page) and [the reply to `wake me`](commands.md#the-reply) have the other conditions. | `WOKESY_ON_CALL__ESCALATION_POLICIES` in the Secret. |
+| `Paged. PagerDuty is alerting whoever is on call.` where you expected names, or a reply to `wake me` with a line for each schedule where you expected a check mark | Nothing is wrong. Wokesy names people after `Paged`, and answers `wake me` with a check mark or in one line, only when it shows exactly one escalation policy. [`page`](commands.md#page) and [the reply to `wake me`](commands.md#the-reply) have the other conditions. | `WOKESY_ON_CALL__ESCALATION_POLICIES` in the Secret. |
 | `Paged, but nobody is on call at any level. …` | PagerDuty got the alert, but no level of the escalation policy that wokesy shows has anybody on call. | The schedules of the policy in PagerDuty. |
 | `…, together with 2 others at level 1.` after `wake me` | Other people are on call at level 1, so an alert reaches all of them at once. The schedule in `WOKESY_WAKE__SCHEDULES` is not empty, or level 1 also has another schedule or names people directly. | [The escalation policy](pagerduty.md#the-escalation-policy). |
 | `… it is not at level 1 of any escalation policy in use …` | The schedule in `WOKESY_WAKE__SCHEDULES` is not the first level of a policy that wokesy shows. | Compare the ids of the schedule and of the policy with PagerDuty. |

@@ -7,14 +7,17 @@ use super::*;
 use crate::on_call::Roster;
 use crate::wake::Config;
 use crate::wake::testing::{
-    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, STRANGER, Setup, fishnet_rota,
-    in_sysadmin, level, lichess_alone, policy, primary_rota, schedule, user, waking_on,
+    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, PRIMARY_SHIFTS, STRANGER, Setup,
+    fishnet_rota, in_sysadmin, level, lichess_alone, policy, primary_rota, schedule, user,
+    waking_on,
 };
 
 const BACKUP_OVERRIDES: &str = "/schedules/PBACKUP/overrides";
 const SPARE_OVERRIDES: &str = "/schedules/PSPARE1/overrides";
+const SPARE_SHIFTS: &str = "/v3/schedules/PSPARE1/custom_shifts";
 const WAKING_IS_OFF: &str = "Waking is not set up here. Change the schedule in PagerDuty directly.";
 const HANDED_BACK: &str = "PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.";
+const SHIFT_ENDS: &str = "PagerDuty ends the shift by itself when the time is up. Send `stop waking me` to end it sooner.";
 const FORBIDDEN: &str = "pagerduty rejected the request (403 Forbidden): Forbidden";
 
 fn at(time: &Value) -> OffsetDateTime {
@@ -30,7 +33,7 @@ async fn did_nothing(answering: &Answering) {
     assert!(!answering.was_asked_to_refresh().await);
 }
 
-async fn answers_an_override(answering: &Answering, overrides: &str, answer: ResponseTemplate) {
+async fn answers_a_create(answering: &Answering, overrides: &str, answer: ResponseTemplate) {
     Mock::given(method("POST"))
         .and(path(overrides))
         .respond_with(answer)
@@ -219,7 +222,7 @@ async fn an_override_whose_answer_was_lost_or_unreadable_may_exist_and_the_reply
         ),
     ] {
         let mut answering = Setup::waking_on_both_rotas().start().await;
-        answers_an_override(&answering, FISHNET_OVERRIDES, answer).await;
+        answers_a_create(&answering, FISHNET_OVERRIDES, answer).await;
         answering
             .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
             .await;
@@ -248,7 +251,7 @@ async fn an_override_whose_answer_was_lost_or_unreadable_may_exist_and_the_reply
 async fn an_override_that_pagerduty_never_answered_may_exist_and_the_reply_says_so() {
     let mut answering = Setup::default().start().await;
     let never = ResponseTemplate::new(201).set_delay(Duration::from_hours(1));
-    answers_an_override(&answering, PRIMARY_OVERRIDES, never).await;
+    answers_a_create(&answering, PRIMARY_OVERRIDES, never).await;
     tokio::time::pause();
 
     let reply = answering
@@ -279,7 +282,7 @@ async fn an_override_that_pagerduty_refused_with_a_client_error_does_not_exist()
         ),
     ] {
         let mut answering = Setup::default().start().await;
-        answers_an_override(&answering, PRIMARY_OVERRIDES, ResponseTemplate::new(status)).await;
+        answers_a_create(&answering, PRIMARY_OVERRIDES, ResponseTemplate::new(status)).await;
 
         assert_eq!(
             answering
@@ -448,5 +451,169 @@ async fn the_roster_is_asked_to_refresh_once_overrides_were_tried() {
             .await;
 
         assert!(answering.was_asked_to_refresh().await, "refused: {refused}");
+    }
+}
+
+fn woken_by_a_shift_until(created: &Value, lines: &[&str]) -> String {
+    format!(
+        ":alarm_clock: I'll wake you for anything until <time:{}>.\n{}\n{SHIFT_ENDS}",
+        created["custom_shifts"][0]["end_time"].as_str().unwrap(),
+        lines.join("\n")
+    )
+}
+
+#[tokio::test]
+async fn on_a_shift_based_schedule_a_custom_shift_is_created_for_the_same_window_instead() {
+    let mut answering = Setup::default().start().await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCS0001"])
+        .await;
+
+    let reply = answering
+        .reply(&in_sysadmin(BOB, "wake me for 90 minutes"))
+        .await;
+
+    assert_eq!(
+        answering.requests().await,
+        [
+            format!("POST {PRIMARY_OVERRIDES}"),
+            format!("POST {PRIMARY_SHIFTS}")
+        ]
+    );
+    let posted = answering.posted().await;
+    let (refused, created) = (&posted[0]["override"], &posted[1]["custom_shifts"]);
+    assert_eq!(
+        created,
+        &json!([{
+            "type": "custom_shift",
+            "start_time": refused["start"],
+            "end_time": refused["end"],
+            "assignments": [{
+                "type": "shift_assignment",
+                "member": { "type": "user_member", "user_id": "PBOB001" },
+            }],
+        }])
+    );
+    assert_eq!(
+        at(&refused["end"]) - at(&refused["start"]),
+        Duration::from_mins(90)
+    );
+    assert_eq!(
+        reply,
+        woken_by_a_shift_until(
+            &posted[1],
+            &[
+                "- **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**."
+            ]
+        )
+    );
+    assert!(answering.was_asked_to_refresh().await);
+}
+
+#[tokio::test]
+async fn a_schedule_found_to_be_shift_based_is_not_asked_for_an_override_again() {
+    let mut answering = Setup::waking_on_both_rotas().start().await;
+    answering
+        .creates_overrides(FISHNET_OVERRIDES, &["PQ00001", "PQ00002"])
+        .await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCS0001", "PCS0002"])
+        .await;
+
+    let first = answering
+        .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+        .await;
+    let second = answering
+        .reply(&in_sysadmin(BOB, "wake me for 4 hours"))
+        .await;
+
+    assert_eq!(
+        answering.requests().await,
+        [
+            format!("POST {FISHNET_OVERRIDES}"),
+            format!("POST {PRIMARY_OVERRIDES}"),
+            format!("POST {PRIMARY_SHIFTS}"),
+            format!("POST {FISHNET_OVERRIDES}"),
+            format!("POST {PRIMARY_SHIFTS}"),
+        ]
+    );
+    let posted = answering.posted().await;
+    let lines = [
+        "- **Fishnet rota**: you are on it. It is level 1 of **Fishnet**.",
+        "- **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**.",
+    ];
+    assert_eq!(first, woken_until(&posted[0], &lines));
+    assert_eq!(second, woken_until(&posted[3], &lines));
+    assert_eq!(
+        posted[4]["custom_shifts"][0]["assignments"][0]["member"]["user_id"],
+        "PBOB001"
+    );
+}
+
+#[tokio::test]
+async fn on_a_shift_based_schedule_the_reply_tells_where_it_is_level_one_without_implying_a_swap() {
+    let mut answering = Setup::waking_on("PI7DH85, PSPARE1", three_policies())
+        .start()
+        .await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering.is_shift_based(SPARE_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCS0001"])
+        .await;
+    answering
+        .creates_custom_shifts(SPARE_SHIFTS, &["PCS0002"])
+        .await;
+
+    let reply = answering
+        .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+        .await;
+
+    let posted = answering.posted().await;
+    assert_eq!(
+        reply,
+        woken_by_a_shift_until(
+            &posted[1],
+            &[
+                "- **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**, **Tournaments**. Level 1 also pages Dave Example, Erin Example, Frank Example directly.",
+                "- `PSPARE1`: you are on it, alongside whoever the schedule has, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.",
+            ]
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_custom_shift_that_pagerduty_refused_does_not_exist_and_one_whose_answer_was_lost_may() {
+    for (answer, line) in [
+        (
+            ResponseTemplate::new(403)
+                .set_body_json(json!({ "error": { "message": "Forbidden", "code": 2010 } })),
+            format!("I couldn't add a shift to it: {FORBIDDEN}"),
+        ),
+        (
+            ResponseTemplate::new(400),
+            "I couldn't add a shift to it: pagerduty rejected the request (400 Bad Request): Bad Request".to_owned(),
+        ),
+        (
+            ResponseTemplate::new(500),
+            "I couldn't confirm the shift: pagerduty rejected the request (500 Internal Server Error): Internal Server Error. It may exist; check PagerDuty.".to_owned(),
+        ),
+        (
+            ResponseTemplate::new(201).set_body_json(json!({ "custom_shifts": [] })),
+            "I couldn't confirm the shift: pagerduty answered 201 Created with a body of an unexpected shape. It may exist; check PagerDuty.".to_owned(),
+        ),
+    ] {
+        let mut answering = Setup::default().start().await;
+        answering.is_shift_based(PRIMARY_OVERRIDES).await;
+        answers_a_create(&answering, PRIMARY_SHIFTS, answer).await;
+
+        assert_eq!(
+            answering
+                .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+                .await,
+            format!(":warning: I couldn't put you on any schedule.\n- **Primary rota**: {line}")
+        );
+        assert!(answering.was_asked_to_refresh().await);
     }
 }

@@ -25,6 +25,7 @@ pub const STRANGER: ChatUserId = ChatUserId(99);
 
 pub const PRIMARY_OVERRIDES: &str = "/schedules/PI7DH85/overrides";
 pub const FISHNET_OVERRIDES: &str = "/schedules/PFISHNT/overrides";
+pub const PRIMARY_SHIFTS: &str = "/v3/schedules/PI7DH85/custom_shifts";
 pub const ENQUEUE: &str = "/v2/enqueue";
 
 pub const ON_CALL_NOW: &str = "\
@@ -33,6 +34,7 @@ pub const ON_CALL_NOW: &str = "\
 - **Lichess**, level 2: Carol Example";
 
 const A_MOMENT: Duration = Duration::from_millis(50);
+const SHIFT_BASED: &str = "This is a shift-based schedule. Use the v3 Schedules API to access it.";
 
 pub struct Setup {
     pub config: Config,
@@ -184,6 +186,29 @@ impl Answering {
             .await;
     }
 
+    pub async fn is_shift_based(&self, overrides: &str) {
+        Mock::given(method("POST"))
+            .and(path(overrides))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": { "message": SHIFT_BASED, "code": 3005, "errors": [SHIFT_BASED] },
+            })))
+            .mount(&self.pagerduty)
+            .await;
+    }
+
+    pub async fn creates_custom_shifts(&self, custom_shifts: &str, ids: &[&str]) {
+        for id in ids {
+            Mock::given(method("POST"))
+                .and(path(custom_shifts))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                    "custom_shifts": [{ "id": id, "type": "custom_shift" }],
+                })))
+                .up_to_n_times(1)
+                .mount(&self.pagerduty)
+                .await;
+        }
+    }
+
     pub async fn deletes_overrides(&self, overrides: &str, ids: &[&str]) {
         for id in ids {
             self.answers_a_delete(overrides, id, ResponseTemplate::new(204))
@@ -191,9 +216,9 @@ impl Answering {
         }
     }
 
-    pub async fn answers_a_delete(&self, overrides: &str, id: &str, answer: ResponseTemplate) {
+    pub async fn answers_a_delete(&self, made: &str, id: &str, answer: ResponseTemplate) {
         Mock::given(method("DELETE"))
-            .and(path(format!("{overrides}/{id}")))
+            .and(path(format!("{made}/{id}")))
             .respond_with(answer)
             .up_to_n_times(1)
             .mount(&self.pagerduty)

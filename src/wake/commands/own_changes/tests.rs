@@ -5,12 +5,12 @@ use wiremock::ResponseTemplate;
 use super::*;
 use crate::on_call::Roster;
 use crate::wake::testing::{
-    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, STRANGER, Setup, directory,
-    in_sysadmin, lichess_alone,
+    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, PRIMARY_SHIFTS, STRANGER, Setup,
+    directory, in_sysadmin, lichess_alone,
 };
 
-const NO_OVERRIDE_OF_THE_SENDER: &str = "I have no override of yours on record. I only end overrides I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
-const NO_OVERRIDE_AT_ALL: &str = "Nothing to undo: I have no override of mine on record. I forget them when I restart; anything I made earlier still ends on time by itself.";
+const NOTHING_OF_THE_SENDER: &str = "I have no override or shift of yours on record. I only end the ones I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
+const NOTHING_AT_ALL: &str = "Nothing to undo: I have no override or shift of mine on record. I forget them when I restart; anything I made earlier still ends on time by itself.";
 const SPARE_OVERRIDES: &str = "/schedules/PSPARE1/overrides";
 const INTERNAL_ERROR: &str =
     "pagerduty rejected the request (500 Internal Server Error): Internal Server Error";
@@ -40,6 +40,29 @@ async fn alice_woken_on_the_primary_rota() -> Answering {
     let mut answering = Setup::default().start().await;
     answering
         .creates_overrides(PRIMARY_OVERRIDES, &["PRALICE"])
+        .await;
+    woken(&mut answering, ALICE).await;
+    answering
+}
+
+async fn alice_woken_on_the_legacy_fishnet_rota_and_the_shift_based_primary_rota() -> Answering {
+    let mut answering = Setup::waking_on_both_rotas().start().await;
+    answering
+        .creates_overrides(FISHNET_OVERRIDES, &["PQALICE"])
+        .await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCALICE"])
+        .await;
+    woken(&mut answering, ALICE).await;
+    answering
+}
+
+async fn alice_woken_on_the_shift_based_primary_rota() -> Answering {
+    let mut answering = Setup::default().start().await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCALICE"])
         .await;
     woken(&mut answering, ALICE).await;
     answering
@@ -123,13 +146,13 @@ async fn an_ended_override_is_forgotten() {
 
     assert_eq!(
         answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
-        NO_OVERRIDE_OF_THE_SENDER
+        NOTHING_OF_THE_SENDER
     );
     assert_eq!(
         answering
             .reply(&in_sysadmin(ALICE, "back to defaults"))
             .await,
-        NO_OVERRIDE_AT_ALL
+        NOTHING_AT_ALL
     );
     assert_eq!(
         requests_after_waking(&answering).await,
@@ -196,7 +219,7 @@ async fn reset_ends_every_override_on_record_whoever_it_is_for() {
     assert!(answering.was_asked_to_refresh().await);
     assert_eq!(
         answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
-        NO_OVERRIDE_OF_THE_SENDER
+        NOTHING_OF_THE_SENDER
     );
 }
 
@@ -233,7 +256,7 @@ async fn stop_from_a_sender_who_is_no_known_pagerduty_user_ends_nothing() {
         answering
             .reply(&in_sysadmin(STRANGER, "stop waking me"))
             .await,
-        NO_OVERRIDE_OF_THE_SENDER
+        NOTHING_OF_THE_SENDER
     );
     assert_eq!(
         requests_after_waking(&answering).await,
@@ -282,9 +305,9 @@ async fn an_override_someone_already_removed_in_pagerduty_counts_as_ended() {
         assert_eq!(
             answering.reply(&in_sysadmin(ALICE, command)).await,
             if command.starts_with("stop") {
-                NO_OVERRIDE_OF_THE_SENDER
+                NOTHING_OF_THE_SENDER
             } else {
-                NO_OVERRIDE_AT_ALL
+                NOTHING_AT_ALL
             }
         );
         assert_eq!(
@@ -383,8 +406,8 @@ async fn an_override_that_could_not_be_ended_stays_on_record_so_reset_can_be_tri
 #[tokio::test]
 async fn an_override_whose_time_is_up_is_forgotten_instead_of_ended() {
     for (command, reply) in [
-        ("stop waking me", NO_OVERRIDE_OF_THE_SENDER),
-        ("back to defaults", NO_OVERRIDE_AT_ALL),
+        ("stop waking me", NOTHING_OF_THE_SENDER),
+        ("back to defaults", NOTHING_AT_ALL),
     ] {
         let mut answering = alice_woken_on_the_primary_rota().await;
         tokio::time::pause();
@@ -425,7 +448,7 @@ async fn an_override_that_was_refused_is_not_on_record() {
 
     assert_eq!(
         answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
-        NO_OVERRIDE_OF_THE_SENDER
+        NOTHING_OF_THE_SENDER
     );
     assert_eq!(
         requests_after_waking(&answering).await,
@@ -439,13 +462,13 @@ async fn with_nothing_on_record_as_after_a_restart_stop_and_reset_ask_pagerduty_
 
     assert_eq!(
         answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
-        NO_OVERRIDE_OF_THE_SENDER
+        NOTHING_OF_THE_SENDER
     );
     assert_eq!(
         answering
             .reply(&in_sysadmin(ALICE, "back to defaults"))
             .await,
-        NO_OVERRIDE_AT_ALL
+        NOTHING_AT_ALL
     );
     assert_eq!(answering.requests().await, Vec::<String>::new());
     assert!(!answering.was_asked_to_refresh().await);
@@ -507,5 +530,189 @@ async fn overrides_made_before_the_roster_knew_the_schedule_and_after_are_ended_
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - `PI7DH85`: ended the override of Alice Example, Bob Example.\n\
          PagerDuty's own schedules and overrides decide again."
+    );
+}
+
+#[tokio::test]
+async fn stop_ends_an_override_through_the_v2_path_and_a_custom_shift_through_the_v3_path() {
+    let mut answering =
+        alice_woken_on_the_legacy_fishnet_rota_and_the_shift_based_primary_rota().await;
+    answering
+        .deletes_overrides(FISHNET_OVERRIDES, &["PQALICE"])
+        .await;
+    answering
+        .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(204))
+        .await;
+
+    let reply = answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+
+    assert_eq!(
+        reply,
+        ":zzz: Ended your override on **Fishnet rota**. The schedule decides again.\n\
+         :zzz: Ended your shift on **Primary rota**. The schedule decides again."
+    );
+    assert_eq!(
+        requests_after_waking(&answering).await,
+        [
+            delete(FISHNET_OVERRIDES, "PQALICE"),
+            delete(PRIMARY_SHIFTS, "PCALICE")
+        ]
+    );
+    assert!(answering.was_asked_to_refresh().await);
+    assert_eq!(
+        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        NOTHING_OF_THE_SENDER
+    );
+}
+
+#[tokio::test]
+async fn reset_ends_an_override_through_the_v2_path_and_a_custom_shift_through_the_v3_path() {
+    let mut answering =
+        alice_woken_on_the_legacy_fishnet_rota_and_the_shift_based_primary_rota().await;
+    answering
+        .deletes_overrides(FISHNET_OVERRIDES, &["PQALICE"])
+        .await;
+    answering
+        .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(204))
+        .await;
+
+    let reply = answering.reply(&in_sysadmin(BOB, "back to defaults")).await;
+
+    assert_eq!(
+        reply,
+        ":leftwards_arrow_with_hook: Back to the defaults.\n\
+         - **Fishnet rota**: ended the override of Alice Example.\n\
+         - **Primary rota**: ended the shift of Alice Example.\n\
+         PagerDuty's own schedules and overrides decide again."
+    );
+    assert_eq!(
+        requests_after_waking(&answering).await,
+        [
+            delete(FISHNET_OVERRIDES, "PQALICE"),
+            delete(PRIMARY_SHIFTS, "PCALICE")
+        ]
+    );
+    assert_eq!(
+        answering.reply(&in_sysadmin(BOB, "back to defaults")).await,
+        NOTHING_AT_ALL
+    );
+}
+
+#[tokio::test]
+async fn a_custom_shift_that_is_gone_or_has_already_ended_counts_as_ended() {
+    for status in [404, 400] {
+        for (command, reply, nothing) in [
+            (
+                "stop waking me",
+                ":zzz: Ended your shift on **Primary rota**. The schedule decides again.",
+                NOTHING_OF_THE_SENDER,
+            ),
+            (
+                "back to defaults",
+                ":leftwards_arrow_with_hook: Back to the defaults.\n\
+                 - **Primary rota**: ended the shift of Alice Example.\n\
+                 PagerDuty's own schedules and overrides decide again.",
+                NOTHING_AT_ALL,
+            ),
+        ] {
+            let mut answering = alice_woken_on_the_shift_based_primary_rota().await;
+            answering
+                .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(status))
+                .await;
+
+            assert_eq!(
+                answering.reply(&in_sysadmin(ALICE, command)).await,
+                reply,
+                "{status}"
+            );
+            assert_eq!(
+                answering.reply(&in_sysadmin(ALICE, command)).await,
+                nothing,
+                "{status}"
+            );
+            assert_eq!(
+                requests_after_waking(&answering).await,
+                [delete(PRIMARY_SHIFTS, "PCALICE")]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_custom_shift_that_could_not_be_ended_stays_on_record_so_it_can_be_tried_again() {
+    for (command, failed, ended) in [
+        (
+            "stop waking me",
+            format!("I couldn't end your shift on **Primary rota**: {INTERNAL_ERROR}"),
+            ":zzz: Ended your shift on **Primary rota**. The schedule decides again.",
+        ),
+        (
+            "back to defaults",
+            format!(
+                ":leftwards_arrow_with_hook: Back to the defaults.\n\
+                 - **Primary rota**: I couldn't end the shift of Alice Example: {INTERNAL_ERROR}\n\
+                 PagerDuty's own schedules and overrides decide again."
+            ),
+            ":leftwards_arrow_with_hook: Back to the defaults.\n\
+             - **Primary rota**: ended the shift of Alice Example.\n\
+             PagerDuty's own schedules and overrides decide again.",
+        ),
+    ] {
+        let mut answering = alice_woken_on_the_shift_based_primary_rota().await;
+        answering
+            .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(500))
+            .await;
+        answering
+            .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(204))
+            .await;
+
+        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, failed);
+        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, ended);
+        assert_eq!(
+            requests_after_waking(&answering).await,
+            [
+                delete(PRIMARY_SHIFTS, "PCALICE"),
+                delete(PRIMARY_SHIFTS, "PCALICE")
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_override_whose_delete_is_answered_400_is_not_ended_and_stays_on_record() {
+    let mut answering = alice_woken_on_the_primary_rota().await;
+    answering
+        .answers_a_delete(PRIMARY_OVERRIDES, "PRALICE", ResponseTemplate::new(400))
+        .await;
+    answering
+        .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE"])
+        .await;
+
+    assert_eq!(
+        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        "I couldn't end your override on **Primary rota**: pagerduty rejected the request (400 Bad Request): Bad Request"
+    );
+    assert_eq!(
+        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        ":zzz: Ended your override on **Primary rota**. The schedule decides again."
+    );
+}
+
+#[tokio::test]
+async fn a_custom_shift_that_was_refused_is_not_on_record() {
+    let mut answering = Setup::default().start().await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering.refuses_overrides(PRIMARY_SHIFTS).await;
+    answering
+        .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+        .await;
+
+    assert_eq!(
+        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        NOTHING_OF_THE_SENDER
+    );
+    assert_eq!(
+        requests_after_waking(&answering).await,
+        Vec::<String>::new()
     );
 }

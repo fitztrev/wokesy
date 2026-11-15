@@ -1,7 +1,8 @@
-mod own_overrides;
+mod own_changes;
 mod paging;
 mod waking;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use tokio::sync::{Notify, watch};
@@ -13,7 +14,7 @@ use crate::on_call::{Roster, on_call_now};
 use crate::pagerduty;
 use crate::people::Directory;
 
-use own_overrides::OwnOverride;
+use own_changes::OwnChange;
 use paging::Paged;
 
 const WAKING_IS_OFF: &str = "Waking is not set up here. Change the schedule in PagerDuty directly.";
@@ -23,9 +24,9 @@ const UNRECOGNIZED: &str = "I don't know that command. Send `help` to see the co
 const HELP: &str = "\
 I manage who is on call in PagerDuty.
 - `page lichess.org is down` alerts whoever is on call, through PagerDuty. Anyone here can use it. After a page I wait a while before I page again.
-- `wake me for 4 hours` puts you on the wake schedule for that long. PagerDuty hands it back when the time is up.
+- `wake me for 4 hours` puts you on the wake schedule for that long. PagerDuty ends it by itself when the time is up.
 - `stop waking me` ends that early.
-- `back to defaults` ends every override I made, for you or anyone else, so PagerDuty's own schedules decide again.
+- `back to defaults` ends every override and shift I made, for you or anyone else, so PagerDuty's own schedules decide again.
 - `who is on call` shows who is on call now.";
 const BETWEEN_OPEN_CHANNELS: &str = " or ";
 
@@ -45,7 +46,8 @@ pub struct Commands {
     config: Config,
     open_channels: Vec<ChannelName>,
     last_page: Option<Paged>,
-    own_overrides: Vec<OwnOverride>,
+    own_changes: Vec<OwnChange>,
+    shift_based: BTreeSet<pagerduty::ScheduleId>,
 }
 
 impl Answer {
@@ -77,7 +79,8 @@ impl Commands {
             config,
             open_channels,
             last_page: None,
-            own_overrides: Vec::new(),
+            own_changes: Vec::new(),
+            shift_based: BTreeSet::new(),
         }
     }
 

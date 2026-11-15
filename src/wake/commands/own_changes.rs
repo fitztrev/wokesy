@@ -4,15 +4,16 @@ use tokio::time::Instant;
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, silenced};
 use crate::on_call::{name_in_chat, schedule_in_chat};
-use crate::pagerduty::{ApiError, OverrideId, ScheduleId, ScheduleName, UserId};
+use crate::pagerduty::{ApiError, CustomShiftId, OverrideId, ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
 
-const NO_OVERRIDE_OF_YOURS: &str = "I have no override of yours on record. I only end overrides I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
-const NOTHING_TO_UNDO: &str = "Nothing to undo: I have no override of mine on record. I forget them when I restart; anything I made earlier still ends on time by itself.";
+const NOTHING_OF_YOURS: &str = "I have no override or shift of yours on record. I only end the ones I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
+const NOTHING_TO_UNDO: &str = "Nothing to undo: I have no override or shift of mine on record. I forget them when I restart; anything I made earlier still ends on time by itself.";
 const BACK_TO_THE_DEFAULTS: &str = ":leftwards_arrow_with_hook: Back to the defaults.";
 const PAGERDUTY_DECIDES_AGAIN: &str = "PagerDuty's own schedules and overrides decide again.";
 const BETWEEN_NAMES: &str = ", ";
 const BETWEEN_FAILURES: &str = "; ";
+const KINDS: [Kind; 2] = [Kind::Override, Kind::CustomShift];
 
 #[derive(Clone, Debug)]
 pub(super) struct WakeSchedule {
@@ -20,18 +21,63 @@ pub(super) struct WakeSchedule {
     pub name: Option<ScheduleName>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    Override,
+    CustomShift,
+}
+
 #[derive(Clone, Debug)]
-pub(super) struct OwnOverride {
+pub(super) enum Made {
+    Override(OverrideId),
+    CustomShift(CustomShiftId),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct OwnChange {
     pub schedule: WakeSchedule,
-    pub id: OverrideId,
+    pub made: Made,
     pub user: UserId,
     pub expires: Instant,
 }
 
 struct Ending {
     schedule: WakeSchedule,
+    kind: Kind,
     user: UserId,
     failure: Option<String>,
+}
+
+impl Kind {
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Override => "override",
+            Self::CustomShift => "shift",
+        }
+    }
+
+    const fn is_gone_after(self) -> &'static [StatusCode] {
+        match self {
+            Self::Override => &[StatusCode::NOT_FOUND],
+            Self::CustomShift => &[StatusCode::NOT_FOUND, StatusCode::BAD_REQUEST],
+        }
+    }
+}
+
+impl Made {
+    pub(super) const fn kind(&self) -> Kind {
+        match self {
+            Self::Override(_) => Kind::Override,
+            Self::CustomShift(_) => Kind::CustomShift,
+        }
+    }
+
+    pub(super) fn id(&self) -> &str {
+        match self {
+            Self::Override(id) => id,
+            Self::CustomShift(id) => id,
+        }
+    }
 }
 
 impl WakeSchedule {
@@ -45,14 +91,14 @@ impl WakeSchedule {
 impl Commands {
     pub(super) fn forget_expired(&mut self) {
         let now = Instant::now();
-        self.own_overrides.retain(|own| own.expires > now);
+        self.own_changes.retain(|own| own.expires > now);
     }
 
     pub(super) async fn stop(&mut self, sender: ChatUserId, directory: &Directory) -> String {
         let sender = directory.pagerduty_user_of(sender).map(|user| &user.id);
         let endings = self.end(|own| Some(&own.user) == sender).await;
         if endings.is_empty() {
-            return NO_OVERRIDE_OF_YOURS.to_owned();
+            return NOTHING_OF_YOURS.to_owned();
         }
         stopped(&endings)
     }
@@ -68,32 +114,34 @@ impl Commands {
         back_to_the_defaults(&endings, directory)
     }
 
-    async fn end(&mut self, chosen: impl Fn(&OwnOverride) -> bool) -> Vec<Ending> {
+    async fn end(&mut self, chosen: impl Fn(&OwnChange) -> bool) -> Vec<Ending> {
         self.forget_expired();
-        let (ending, kept): (Vec<OwnOverride>, Vec<OwnOverride>) =
-            std::mem::take(&mut self.own_overrides)
+        let (ending, kept): (Vec<OwnChange>, Vec<OwnChange>) =
+            std::mem::take(&mut self.own_changes)
                 .into_iter()
                 .partition(chosen);
-        self.own_overrides = kept;
+        self.own_changes = kept;
         let mut endings = Vec::with_capacity(ending.len());
         for own in ending {
+            let kind = own.made.kind();
             let failure = match self.delete(&own).await {
                 Ok(()) => {
-                    tracing::info!(schedule = %own.schedule.id, override_id = %own.id, user = %own.user, "ended an override");
+                    tracing::info!(schedule = %own.schedule.id, kind = kind.name(), id = own.made.id(), user = %own.user, "ended what was made on a schedule");
                     None
                 }
                 Err(error) => {
-                    tracing::warn!(schedule = %own.schedule.id, override_id = %own.id, user = %own.user, error = %error, cause = ?std::error::Error::source(&error), "could not end an override");
+                    tracing::warn!(schedule = %own.schedule.id, kind = kind.name(), id = own.made.id(), user = %own.user, error = %error, cause = ?std::error::Error::source(&error), "could not end what was made on a schedule");
                     Some(error.to_string())
                 }
             };
             let ending = Ending {
                 schedule: own.schedule.clone(),
+                kind,
                 user: own.user.clone(),
                 failure,
             };
             if ending.failure.is_some() {
-                self.own_overrides.push(own);
+                self.own_changes.push(own);
             }
             endings.push(ending);
         }
@@ -103,46 +151,48 @@ impl Commands {
         endings
     }
 
-    async fn delete(&self, own: &OwnOverride) -> Result<(), ApiError> {
-        let deleted = self
-            .pagerduty
-            .delete_schedule_override(&own.schedule.id, &own.id)
-            .await;
+    async fn delete(&self, own: &OwnChange) -> Result<(), ApiError> {
+        let schedule = &own.schedule.id;
+        let deleted = match &own.made {
+            Made::Override(id) => self.pagerduty.delete_schedule_override(schedule, id).await,
+            Made::CustomShift(id) => self.pagerduty.delete_custom_shift(schedule, id).await,
+        };
         match deleted {
-            Err(ApiError::Rejected {
-                status: StatusCode::NOT_FOUND,
-                ..
-            }) => Ok(()),
+            Err(ApiError::Rejected { status, .. })
+                if own.made.kind().is_gone_after().contains(&status) =>
+            {
+                Ok(())
+            }
             answered => answered,
         }
     }
 }
 
 fn stopped(endings: &[Ending]) -> String {
-    let ended = distinct(
-        endings
-            .iter()
-            .filter(|ending| ending.failure.is_none())
-            .map(|ending| ending.schedule.in_chat()),
-    );
-    let ended = (!ended.is_empty()).then(|| {
-        format!(
-            ":zzz: Ended your override on {}. The schedule decides again.",
-            ended.join(BETWEEN_NAMES)
-        )
+    let ended = KINDS.into_iter().filter_map(|kind| {
+        let ended = distinct(
+            endings
+                .iter()
+                .filter(|ending| ending.kind == kind && ending.failure.is_none())
+                .map(|ending| ending.schedule.in_chat()),
+        );
+        (!ended.is_empty()).then(|| {
+            format!(
+                ":zzz: Ended your {} on {}. The schedule decides again.",
+                kind.name(),
+                ended.join(BETWEEN_NAMES)
+            )
+        })
     });
     let failed = distinct(endings.iter().filter_map(|ending| {
         let error = ending.failure.as_ref()?;
         Some(format!(
-            "I couldn't end your override on {}: {error}",
+            "I couldn't end your {} on {}: {error}",
+            ending.kind.name(),
             ending.schedule.in_chat()
         ))
     }));
-    ended
-        .into_iter()
-        .chain(failed)
-        .collect::<Vec<_>>()
-        .join("\n")
+    ended.chain(failed).collect::<Vec<_>>().join("\n")
 }
 
 fn back_to_the_defaults(endings: &[Ending], directory: &Directory) -> String {
@@ -176,27 +226,31 @@ fn outcome(on_schedule: &[&Ending], directory: &Directory) -> String {
             .name_of(user)
             .map_or_else(|| silenced(user), name_in_chat)
     };
-    let ended = distinct(
-        on_schedule
-            .iter()
-            .filter(|ending| ending.failure.is_none())
-            .map(|ending| name(&ending.user)),
-    );
-    let ended = (!ended.is_empty())
-        .then(|| format!("ended the override of {}.", ended.join(BETWEEN_NAMES)));
+    let ended = KINDS.into_iter().filter_map(|kind| {
+        let ended = distinct(
+            on_schedule
+                .iter()
+                .filter(|ending| ending.kind == kind && ending.failure.is_none())
+                .map(|ending| name(&ending.user)),
+        );
+        (!ended.is_empty()).then(|| {
+            format!(
+                "ended the {} of {}.",
+                kind.name(),
+                ended.join(BETWEEN_NAMES)
+            )
+        })
+    });
     let failed = distinct(on_schedule.iter().filter_map(|ending| {
         let error = ending.failure.as_ref()?;
         Some(format!(
-            "I couldn't end the override of {}: {error}",
+            "I couldn't end the {} of {}: {error}",
+            ending.kind.name(),
             name(&ending.user)
         ))
     }));
     let failed = (!failed.is_empty()).then(|| failed.join(BETWEEN_FAILURES));
-    ended
-        .into_iter()
-        .chain(failed)
-        .collect::<Vec<_>>()
-        .join(" ")
+    ended.chain(failed).collect::<Vec<_>>().join(" ")
 }
 
 fn distinct<T: PartialEq>(all: impl Iterator<Item = T>) -> Vec<T> {

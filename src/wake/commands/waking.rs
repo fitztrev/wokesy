@@ -1,20 +1,25 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use humantime::format_duration;
 use time::OffsetDateTime;
 use tokio::time::Instant;
 
-use super::own_overrides::{OwnOverride, WakeSchedule};
+use super::own_changes::{Kind, Made, OwnChange, WakeSchedule};
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, time_tag};
 use crate::on_call::{Level, Policy, Roster, name_in_chat, policy_in_chat};
-use crate::pagerduty::{ApiError, ScheduleId, ScheduleName, UserId};
+use crate::pagerduty::{self, ApiError, ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
 
 const FOR_HOW_LONG: &str = "For how long? For example: `wake me for 4 hours`.";
 const ON_NO_SCHEDULE: &str = ":warning: I couldn't put you on any schedule.";
 const HANDED_BACK: &str = "PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.";
-const NOT_AT_THE_FIRST_LINE: &str = "you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.";
+const SHIFT_ENDS: &str = "PagerDuty ends the shift by itself when the time is up. Send `stop waking me` to end it sooner.";
+const ON_IT: &str = "you are on it";
+const ON_IT_ALONGSIDE: &str = "you are on it, alongside whoever the schedule has";
+const NOT_AT_THE_FIRST_LINE: &str =
+    "but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.";
 const FIRST_LINE: u32 = 1;
 const BETWEEN_NAMES: &str = ", ";
 
@@ -60,43 +65,71 @@ impl Commands {
         };
         self.forget_expired();
         let mut lines = Vec::new();
-        let mut on_some_schedule = false;
+        let mut made_on_some_schedule = Vec::new();
         for id in self.config.schedules.ids() {
             let schedule = WakeSchedule {
                 id: id.clone(),
                 name: name_of(id, roster),
             };
-            let created = self
-                .pagerduty
-                .create_schedule_override(id, &user.id, stint.starts, stint.ends)
-                .await;
-            let outcome = match created {
-                Ok(override_id) => {
-                    tracing::info!(schedule = %id, override_id = %override_id, user = %user.id, "created an override");
-                    self.own_overrides.push(OwnOverride {
+            let (kind, made) =
+                put_on(&self.pagerduty, &mut self.shift_based, id, &user.id, &stint).await;
+            let outcome = match made {
+                Ok(made) => {
+                    tracing::info!(schedule = %id, kind = kind.name(), id = made.id(), user = %user.id, "put a person on a schedule");
+                    self.own_changes.push(OwnChange {
                         schedule: schedule.clone(),
-                        id: override_id,
+                        made,
                         user: user.id.clone(),
                         expires: stint.expires,
                     });
-                    on_some_schedule = true;
-                    on_it(id, roster)
+                    made_on_some_schedule.push(kind);
+                    on_it(id, roster, kind)
                 }
                 Err(error) => {
-                    tracing::warn!(schedule = %id, user = %user.id, error = %error, cause = ?std::error::Error::source(&error), "could not create an override");
-                    if certainly_refused(&error) {
-                        format!("I couldn't override it: {error}")
-                    } else {
-                        format!(
-                            "I couldn't confirm the override: {error}. It may exist; check PagerDuty."
-                        )
-                    }
+                    tracing::warn!(schedule = %id, kind = kind.name(), user = %user.id, error = %error, cause = ?std::error::Error::source(&error), "could not put a person on a schedule");
+                    could_not(kind, &error)
                 }
             };
             lines.push(format!("- {}: {outcome}", schedule.in_chat()));
         }
         self.refresh.notify_one();
-        woken(on_some_schedule.then_some(stint.ends), lines)
+        woken(stint.ends, &made_on_some_schedule, lines)
+    }
+}
+
+async fn put_on(
+    pagerduty: &pagerduty::Api,
+    shift_based: &mut BTreeSet<ScheduleId>,
+    schedule: &ScheduleId,
+    user: &UserId,
+    stint: &Stint,
+) -> (Kind, Result<Made, ApiError>) {
+    if !shift_based.contains(schedule) {
+        let overridden = pagerduty
+            .create_schedule_override(schedule, user, stint.starts, stint.ends)
+            .await;
+        if !matches!(overridden, Err(ApiError::ShiftBasedSchedule { .. })) {
+            return (Kind::Override, overridden.map(Made::Override));
+        }
+        tracing::info!(schedule = %schedule, "the schedule is shift-based, so it gets a custom shift instead of an override");
+        shift_based.insert(schedule.clone());
+    }
+    let added = pagerduty
+        .create_custom_shift(schedule, user, stint.starts, stint.ends)
+        .await;
+    (Kind::CustomShift, added.map(Made::CustomShift))
+}
+
+fn could_not(kind: Kind, error: &ApiError) -> String {
+    if !certainly_refused(error) {
+        return format!(
+            "I couldn't confirm the {}: {error}. It may exist; check PagerDuty.",
+            kind.name()
+        );
+    }
+    match kind {
+        Kind::Override => format!("I couldn't override it: {error}"),
+        Kind::CustomShift => format!("I couldn't add a shift to it: {error}"),
     }
 }
 
@@ -108,19 +141,24 @@ fn certainly_refused(error: &ApiError) -> bool {
     )
 }
 
-fn woken(until: Option<OffsetDateTime>, lines: Vec<String>) -> String {
-    let heading = until.map_or_else(
-        || ON_NO_SCHEDULE.to_owned(),
-        |until| {
-            format!(
-                ":alarm_clock: I'll wake you for anything until {}.",
-                time_tag(until)
-            )
-        },
-    );
+fn woken(until: OffsetDateTime, made: &[Kind], lines: Vec<String>) -> String {
+    let (heading, ending) = if made.is_empty() {
+        (ON_NO_SCHEDULE.to_owned(), None)
+    } else {
+        let heading = format!(
+            ":alarm_clock: I'll wake you for anything until {}.",
+            time_tag(until)
+        );
+        let ending = if made.contains(&Kind::Override) {
+            HANDED_BACK
+        } else {
+            SHIFT_ENDS
+        };
+        (heading, Some(ending.to_owned()))
+    };
     std::iter::once(heading)
         .chain(lines)
-        .chain(until.map(|_| HANDED_BACK.to_owned()))
+        .chain(ending)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -135,7 +173,11 @@ fn name_of(schedule: &ScheduleId, roster: &Roster) -> Option<ScheduleName> {
         .map(|known| known.name.clone())
 }
 
-fn on_it(schedule: &ScheduleId, roster: &Roster) -> String {
+fn on_it(schedule: &ScheduleId, roster: &Roster, kind: Kind) -> String {
+    let on_it = match kind {
+        Kind::Override => ON_IT,
+        Kind::CustomShift => ON_IT_ALONGSIDE,
+    };
     let first_lines: Vec<(&Policy, &Level)> = roster
         .policies
         .iter()
@@ -152,7 +194,7 @@ fn on_it(schedule: &ScheduleId, roster: &Roster) -> String {
         })
         .collect();
     if first_lines.is_empty() {
-        return NOT_AT_THE_FIRST_LINE.to_owned();
+        return format!("{on_it}, {NOT_AT_THE_FIRST_LINE}");
     }
     let policies: Vec<String> = first_lines
         .iter()
@@ -167,7 +209,7 @@ fn on_it(schedule: &ScheduleId, roster: &Roster) -> String {
         }
     }
     let level_1_of = format!(
-        "you are on it. It is level 1 of {}.",
+        "{on_it}. It is level 1 of {}.",
         policies.join(BETWEEN_NAMES)
     );
     if names.is_empty() {

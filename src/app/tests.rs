@@ -14,7 +14,10 @@ use tokio::sync::oneshot;
 use super::*;
 use crate::chat::{ChannelName, ChatUserId, Conversation, TopicName};
 use crate::status;
-use fake_pagerduty::{ENQUEUE, FakePagerDuty, ON_CALL, PRIMARY_ROTA_OVERRIDES};
+use fake_pagerduty::{
+    ENQUEUE, FakePagerDuty, ON_CALL, PRIMARY_ROTA_OVERRIDES, PRIMARY_ROTA_SHIFT,
+    PRIMARY_ROTA_SHIFTS,
+};
 use fake_zulip::{ALICE, BOB, FakeZulip, SAM};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -110,7 +113,14 @@ impl Wokesy {
     }
 
     async fn start_on(zulip: FakeZulip, longest_waits: LongestWaits) -> Self {
-        let pagerduty = FakePagerDuty::start().await;
+        Self::start_between(FakePagerDuty::start().await, zulip, longest_waits).await
+    }
+
+    async fn start_between(
+        pagerduty: FakePagerDuty,
+        zulip: FakeZulip,
+        longest_waits: LongestWaits,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let probes = listener.local_addr().unwrap();
         let (shutdown, requested) = oneshot::channel();
@@ -134,12 +144,25 @@ impl Wokesy {
     }
 
     async fn settled_waiting_at_most(longest_waits: LongestWaits) -> Self {
-        let wokesy = Self::start_on(FakeZulip::start().await, longest_waits).await;
-        let mut status = wokesy.zulip.posts_in_channel(STATUS);
-        wokesy.zulip.posts_in(on_call_topic()).next().await;
+        Self::start_on(FakeZulip::start().await, longest_waits)
+            .await
+            .once_settled()
+            .await
+    }
+
+    async fn settled_on(pagerduty: FakePagerDuty) -> Self {
+        Self::start_between(pagerduty, FakeZulip::start().await, LONGEST_WAITS)
+            .await
+            .once_settled()
+            .await
+    }
+
+    async fn once_settled(self) -> Self {
+        let mut status = self.zulip.posts_in_channel(STATUS);
+        self.zulip.posts_in(on_call_topic()).next().await;
         status.next().await;
         status.next().await;
-        wokesy
+        self
     }
 
     async fn probe(&self, path: &str) -> StatusCode {
@@ -229,6 +252,73 @@ async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_s
         asked[overridden..]
             .iter()
             .any(|asked| asked.is(&Method::GET, ON_CALL))
+    );
+}
+
+#[tokio::test]
+async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_me_deletes_it() {
+    let wokesy = Wokesy::settled_on(FakePagerDuty::start_with_a_shift_based_rota().await).await;
+    let mut announcements = wokesy.zulip.posts_in(on_call_topic());
+    let mut answers = wokesy.zulip.posts_in(incident_topic());
+    assert_eq!(announcements.next().await, ON_CALL_NOW);
+
+    wokesy
+        .zulip
+        .mention(ALICE, SYSADMIN, "incident", "wake me for 4 hours");
+    let woken = answers.next().await;
+    let added = announcements.next().await;
+    wokesy
+        .zulip
+        .mention(ALICE, SYSADMIN, "incident", "stop waking me");
+    let stopped = answers.next().await;
+    let removed = announcements.next().await;
+
+    let changes = wokesy.pagerduty.changes_asked();
+    let [refused, created, deleted] = changes.as_slice() else {
+        panic!("expected three changes asked of PagerDuty, got {changes:#?}");
+    };
+    let shift = &created.body["custom_shifts"][0];
+    let moment = |field: &str| OffsetDateTime::parse(shift[field].as_str().unwrap(), &Rfc3339);
+    let until = shift["end_time"].as_str().unwrap();
+    assert!(refused.is(&Method::POST, PRIMARY_ROTA_OVERRIDES));
+    assert!(created.is(&Method::POST, PRIMARY_ROTA_SHIFTS));
+    assert!(deleted.is(&Method::DELETE, PRIMARY_ROTA_SHIFT));
+    assert_eq!(
+        shift["assignments"],
+        json!([{
+            "type": "shift_assignment",
+            "member": { "type": "user_member", "user_id": fake_pagerduty::ALICE },
+        }])
+    );
+    assert_eq!(
+        moment("end_time").unwrap() - moment("start_time").unwrap(),
+        Duration::from_hours(4)
+    );
+    assert_eq!(
+        woken,
+        format!(
+            ":alarm_clock: I'll wake you for anything until <time:{until}>.\n\
+             - **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**.\n\
+             PagerDuty ends the shift by itself when the time is up. Send `stop waking me` to end it sooner."
+        )
+    );
+    assert_eq!(
+        added,
+        format!(
+            ":pager: **On call changed**\n\
+             - **Lichess**, level 1: @_**|{ALICE}** until <time:{until}>, @_**|{BOB}** until <time:2026-11-14T20:00:00Z> (was @_**|{BOB}**)"
+        )
+    );
+    assert_eq!(
+        stopped,
+        ":zzz: Ended your shift on **Primary rota**. The schedule decides again."
+    );
+    assert_eq!(
+        removed,
+        format!(
+            ":pager: **On call changed**\n\
+             - **Lichess**, level 1: @_**|{BOB}** until <time:2026-11-14T20:00:00Z> (was @_**|{ALICE}**, @_**|{BOB}**)"
+        )
     );
 }
 

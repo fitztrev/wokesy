@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is the source of truth: wokesy keeps an in-memory copy of who is on call, announces in a Zulip topic when that changes, and takes commands from channel messages that start with a mention of it: `page …`, `wake me for …`, `stop waking me`, `back to defaults`, `who is on call`, and `help`. [README.md](README.md) says what each does for the people who use it.
+Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is the source of truth: wokesy keeps an in-memory copy of who is on call, announces in a Zulip topic when that changes, and takes commands from channel messages that start with a mention of it: `page …`, `wake me for …`, `stop waking me`, `back to defaults`, `who is on call`, and `help`. [docs/commands.md](docs/commands.md) says what each does for the people who use it.
 
 ## Rules
 
@@ -57,6 +57,7 @@ Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is
 | `src/status/` | `Status` posts the start, the changes in PagerDuty's availability, and the shutdown to a topic of its own per instance. Without a status channel it only logs them |
 | `src/app/` | `app.rs`: `run`, the wiring, the supervision, the shutdown order with its `LongestWaits`, and `http_client()`. `config.rs`: `Config`, read from the environment. `http.rs`: `/livez` and `/readyz`. `telemetry.rs`: logs and OTLP export. `tests.rs`: the end-to-end tests, with the fake PagerDuty and the fake Zulip under `tests/` |
 | `src/testing.rs` | `Logs`, for a test that checks what is logged |
+| `README.md`, `docs/` | The documentation for the people who use and run wokesy. `README.md` is the short introduction and links to `docs/`. Each fact is written once, in one file of `docs/`, and a change in behaviour changes that file: `commands.md` for a wording or a reply, `announcements.md` for what wokesy posts without being asked, `pagerduty.md` for what it reads and writes in PagerDuty, `zulip.md` for the channels, the mentions, and the matching of people, `settings.md` for an environment variable, `deploy.md` for the Kubernetes resources, the probes, and the shutdown, `troubleshooting.md` for a reply or a log message that it quotes, `development.md` for running it locally |
 | `deploy/` | Kubernetes resources in KCL: `wokesy/` is the typed workload, one `Deployment` that reads every setting from the Secret `wokesy`, and its tests in `workload_test.k`; `prod/main.k` pins the released version |
 | `flake.nix` | The release build and the layered container image (`wokesy`), and the `release` and `release-guards` commands |
 | `ci/`, `.github/` | Release hooks and the nixpkgs/rust-overlay pin check; the `Build`, `Release`, and `Deploy` workflows |

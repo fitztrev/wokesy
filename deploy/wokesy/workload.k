@@ -46,6 +46,7 @@ resources = lambda release: Release -> [apps.Deployment] {
                     metadata = {labels = _labels}
                     spec = core.PodSpec {
                         terminationGracePeriodSeconds = 30
+                        enableServiceLinks = False
                         securityContext = core.PodSecurityContext {
                             runAsNonRoot = True
                             runAsUser = UNPRIVILEGED_ID

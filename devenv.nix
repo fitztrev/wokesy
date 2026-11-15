@@ -32,6 +32,8 @@
 
   scripts.render-manifests.exec = ''cd "$DEVENV_ROOT/deploy" && exec kcl run --quiet prod/main.k'';
 
+  scripts.test-manifests.exec = ''cd "$DEVENV_ROOT/deploy" && exec kcl test ./...'';
+
   scripts.release.exec = ''cd "$DEVENV_ROOT" && exec nix run "$DEVENV_ROOT#release" -- "$@"'';
 
   scripts.deploy.exec = ''
@@ -52,5 +54,6 @@
     cargo clippy --all-targets -- -D warnings
     cargo nextest run
     cargo test --doc
+    test-manifests
   '';
 }

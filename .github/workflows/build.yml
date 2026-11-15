@@ -34,6 +34,9 @@ jobs:
       - name: Run doc tests
         run: devenv shell -- cargo test --doc
 
+      - name: Test Kubernetes manifests
+        run: devenv shell -- test-manifests
+
       - name: Validate Kubernetes manifests
         run: devenv shell -- bash -c 'render-manifests | kubeconform -strict -summary -'
 

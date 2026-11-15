@@ -35,7 +35,9 @@ The mention must be the first thing in the message. Wokesy ignores a message tha
 
   `page` works even while wokesy cannot read the rest of PagerDuty. If paging is not set up, or PagerDuty refuses the alert, wokesy says so and tells the sender to use PagerDuty directly.
 
-- **`wake me for 4 hours`** puts the sender on call for that long. Wokesy creates a PagerDuty schedule override for the sender, from now until the time is up, on each schedule named in `WOKESY_WAKE__SCHEDULES`. It overrides no other schedule. If that setting is empty, `wake me` is off, and wokesy answers `Waking is not set up here. Change the schedule in PagerDuty directly.` PagerDuty ends the override by itself and hands the shift back to the schedule, even if wokesy is not running then. The on-call topic then shows the change.
+- **`wake me for 4 hours`** puts the sender on call for that long, from now until the time is up, on each schedule named in `WOKESY_WAKE__SCHEDULES`. It touches no other schedule. If that setting is empty, `wake me` is off, and wokesy answers `Waking is not set up here. Change the schedule in PagerDuty directly.`
+
+  Wokesy works with both kinds of PagerDuty schedule. On a legacy schedule, which is built from layers, it creates a schedule override, and the sender replaces whoever was scheduled. On a shift-based schedule it creates a custom shift, and the sender is on call alongside whoever is scheduled. PagerDuty no longer lets new legacy schedules be created, so every new schedule is shift-based. Wokesy tries the override first. PagerDuty refuses it on a shift-based schedule, and wokesy then creates the custom shift and remembers the kind of that schedule until it restarts. In both cases PagerDuty ends it by itself when the time is up, even if wokesy is not running then, and `stop waking me` ends it early. The on-call topic then shows the change.
 
   The reply has one line for each of those schedules. Zulip shows it like this:
 
@@ -47,15 +49,17 @@ The mention must be the first thing in the message. Wokesy ignores a message tha
   PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.
   ```
 
-  For each schedule, the reply names the escalation policies that have it at level 1. When level 1 of such a policy also names people directly, the reply says that level 1 also pages them. A schedule that is in no escalation policy of the roster is shown by its id. If PagerDuty's answer to an override was lost or could not be read, wokesy does not know whether the override exists. It then says `I couldn't confirm the override` with the error, and `It may exist; check PagerDuty.` Wokesy has no record of such an override, so `stop waking me` cannot end it.
+  On a shift-based schedule the line says `you are on it, alongside whoever the schedule has`, because nobody is replaced. When every schedule in the reply is shift-based, the last line is ``PagerDuty ends the shift by itself when the time is up. Send `stop waking me` to end it sooner.``
+
+  For each schedule, the reply names the escalation policies that have it at level 1. When level 1 of such a policy also names people directly, the reply says that level 1 also pages them. A schedule that is in no escalation policy of the roster is shown by its id. If PagerDuty's answer to an override or a custom shift was lost or could not be read, wokesy does not know whether it exists. It then says `I couldn't confirm the override` or `I couldn't confirm the shift` with the error, and `It may exist; check PagerDuty.` Wokesy has no record of it, so `stop waking me` cannot end it.
 
   The duration is a whole number and a unit: minutes (`m`, `min`, `mins`, `minute`, `minutes`), hours (`h`, `hr`, `hrs`, `hour`, `hours`), or days (`d`, `day`, `days`). `a` and `an` mean one. Several amounts are added together, and other words are ignored. All of these work: `wake me for 4 hours`, `wake me 4h`, `wake me for 90 minutes`, `wake me for 1h30m`, `wake me for 1 hour 30 minutes`, `wake me for an hour`, `wake me for anything in the next 4 hours`.
 
   The longest time wokesy sets is 7 days. For longer, it tells the sender to ask for less or to change the schedule in PagerDuty. To change the limit, set `WOKESY_WAKE__LONGEST`.
 
-- **`stop waking me`** ends that early. Wokesy deletes the overrides that it made for the sender with `wake me`, and the schedule decides again. Any message whose first word is `stop` does the same.
+- **`stop waking me`** ends that early. Wokesy deletes the overrides and the custom shifts that it made for the sender with `wake me`, and the schedule decides again. Any message whose first word is `stop` does the same.
 
-- **`back to defaults`** ends every override that wokesy made, for whoever it made them, so every schedule it touched is back to what PagerDuty would do without wokesy. Only a sender whom wokesy can match to a PagerDuty user may do this. A message that starts with `reset` or `back to`, or that has the word `default` or `defaults` in it, does the same.
+- **`back to defaults`** ends every override and every custom shift that wokesy made, for whoever it made them, so every schedule it touched is back to what PagerDuty would do without wokesy. Only a sender whom wokesy can match to a PagerDuty user may do this. A message that starts with `reset` or `back to`, or that has the word `default` or `defaults` in it, does the same.
 
 - **`who is on call`** shows the same roster as the first announcement. `on call`, `oncall`, `status`, and any message that starts with `who` do the same.
 
@@ -65,20 +69,20 @@ The mention must be the first thing in the message. Wokesy ignores a message tha
 
 `wake me` and `back to defaults` work only for a sender wokesy can match to a PagerDuty user. See [How people are matched](#how-people-are-matched). Right after it starts, wokesy answers `I'm still reading PagerDuty. Try again in a minute.` to `wake me`, `stop waking me`, `back to defaults`, and `who is on call`, until it has read who is on call and matched the people. `page` and `help` never wait for that.
 
-Wokesy answers one command at a time. It waits at most 10 seconds for PagerDuty to create or delete one override, so a slow PagerDuty cannot hold up a `page` for long.
+Wokesy answers one command at a time. It waits at most 10 seconds for PagerDuty to create or delete one override or custom shift, so a slow PagerDuty cannot hold up a `page` for long.
 
-### Wokesy only ends overrides it made itself
+### Wokesy only ends what it made itself
 
-`stop waking me` and `back to defaults` never touch an override that a person entered in PagerDuty, such as a planned swap or holiday cover. PagerDuty has no way to mark an override, so wokesy remembers the ones it creates, and it ends only those.
+`stop waking me` and `back to defaults` never touch an override or a custom shift that a person entered in PagerDuty, such as a planned swap or holiday cover. PagerDuty has no way to mark one, so wokesy remembers the ones it creates, and it ends only those.
 
-It remembers them in memory. After a restart it has forgotten them, and it can no longer end them early: `stop waking me` then answers that it has no override of the sender on record. They still end on time, because PagerDuty ends them. To end one sooner, remove it in PagerDuty.
+It remembers them in memory. After a restart it has forgotten them, and it can no longer end them early: `stop waking me` then answers that it has no override or shift of the sender on record. They still end on time, because PagerDuty ends them. To end one sooner, remove it in PagerDuty.
 
 ## What it does not do
 
-- **It never edits a schedule or an escalation policy.** The only things wokesy changes in PagerDuty are schedule overrides that it creates itself and later deletes, and the alerts it triggers for `page`.
-- **It keeps nothing between restarts.** After a restart, wokesy reads everything from PagerDuty and Zulip again and posts the whole roster again. An override made with `wake me` is not lost, because PagerDuty holds it, but wokesy no longer knows that it made it. The wait after a page starts from nothing too.
+- **It never edits a schedule or an escalation policy.** The only things wokesy changes in PagerDuty are schedule overrides and custom shifts that it creates itself and later deletes, and the alerts it triggers for `page`.
+- **It keeps nothing between restarts.** After a restart, wokesy reads everything from PagerDuty and Zulip again and posts the whole roster again. An override or a custom shift made with `wake me` is not lost, because PagerDuty holds it, but wokesy no longer knows that it made it. The wait after a page starts from nothing too.
 - **It ignores escalation policies that no service uses.** Only a policy used by at least one PagerDuty service appears in the roster. If `WOKESY_ON_CALL__ESCALATION_POLICIES` is set, only the policies named there appear.
-- **It overrides only the schedules you name.** `wake me` touches the schedules in `WOKESY_WAKE__SCHEDULES` and no others.
+- **It puts people only on the schedules you name.** `wake me` touches the schedules in `WOKESY_WAKE__SCHEDULES` and no others.
 - **It does not decide who is paged.** `page` triggers an alert on one PagerDuty service, and PagerDuty does the rest.
 - **It does not notify anyone in Zulip.** Every mention it writes is silent. It makes the mentions silent in the text of a page and in every name from PagerDuty before it repeats them.
 
@@ -86,9 +90,9 @@ It remembers them in memory. After a restart it has forgotten them, and it can n
 
 ### PagerDuty
 
-1. Create a REST API key under **Integrations → API Access Keys**. Do not make it read-only: wokesy reads the users, the escalation policies, and who is on call, and it creates and deletes schedule overrides. This key is `WOKESY_PAGERDUTY__TOKEN`.
+1. Create a REST API key under **Integrations → API Access Keys**. Do not make it read-only: wokesy reads the users, the escalation policies, and who is on call, and it creates and deletes schedule overrides and custom shifts. This key is `WOKESY_PAGERDUTY__TOKEN`.
 2. To turn on `page`, open the service that a page should alert, and add an integration of the type **Events API V2**. The integration key that PagerDuty shows for it is the routing key. Set it as `WOKESY_PAGERDUTY__EVENTS__ROUTING_KEY`. Without it, paging is off and `page` says so.
-3. To turn on `wake me`, set `WOKESY_WAKE__SCHEDULES` to the ids of the schedules that it may override, separated by commas: `PI7DH85, PFISHNT`. The id of a schedule is the `P…` code at the end of its PagerDuty URL. Most teams name one schedule: the one at level 1 of their escalation policy. Without this setting, `wake me` is off.
+3. To turn on `wake me`, set `WOKESY_WAKE__SCHEDULES` to the ids of the schedules that it may put people on, separated by commas: `PI7DH85, PFISHNT`. Legacy and shift-based schedules both work. The id of a schedule is the `P…` code at the end of its PagerDuty URL. Most teams name one schedule: the one at level 1 of their escalation policy. Without this setting, `wake me` is off.
 4. If the account has escalation policies of other teams, set `WOKESY_ON_CALL__ESCALATION_POLICIES` to the ids of the ones that wokesy should show, separated by commas. The id of an escalation policy is the `P…` code at the end of its PagerDuty URL. Without this setting, wokesy shows every escalation policy that a service uses.
 5. If your account is in PagerDuty's EU region, also set `WOKESY_PAGERDUTY__BASE_URL` to `https://api.eu.pagerduty.com/` and `WOKESY_PAGERDUTY__EVENTS__URL` to `https://events.eu.pagerduty.com/`.
 
@@ -144,7 +148,7 @@ Spaces around the commas in a list are allowed, and an empty piece is skipped. A
 | `WOKESY_ON_CALL__ESCALATION_POLICIES` | empty: every policy that a service uses | yes | Ids of the PagerDuty escalation policies that wokesy shows and announces, separated by commas |
 | `WOKESY_PEOPLE__LINKS` | empty | yes | Links from PagerDuty email addresses to Zulip user IDs |
 | `WOKESY_PEOPLE__REFRESH_INTERVAL` | `5m` | | How often wokesy reads the PagerDuty users and the Zulip members |
-| `WOKESY_WAKE__SCHEDULES` | empty: `wake me` is off | yes | Ids of the PagerDuty schedules that `wake me` overrides, separated by commas. The id is the `P…` code in the schedule's PagerDuty URL |
+| `WOKESY_WAKE__SCHEDULES` | empty: `wake me` is off | yes | Ids of the PagerDuty schedules that `wake me` puts the sender on, legacy or shift-based, separated by commas. The id is the `P…` code in the schedule's PagerDuty URL |
 | `WOKESY_WAKE__CHANNELS` | empty: only the announcements channel | yes | Channels where wokesy takes commands, separated by commas |
 | `WOKESY_WAKE__LONGEST` | `7d` | | Longest time `wake me` may set |
 | `WOKESY_WAKE__PAGE_COOLDOWN` | `5m` | | How long wokesy refuses to page again after a page. `0s` turns the wait off |
@@ -164,7 +168,7 @@ Spaces around the commas in a list are allowed, and an empty piece is skipped. A
 
 You need [Nix](https://nixos.org/download/) and [devenv](https://devenv.sh/) 2.4 or later. devenv installs Rust and the project's own commands, such as `run-on-zulip`.
 
-Wokesy run this way talks to the real PagerDuty account and the real Zulip organization that you give it. `wake me` makes real overrides, and `page` alerts real people.
+Wokesy run this way talks to the real PagerDuty account and the real Zulip organization that you give it. `wake me` makes real overrides and custom shifts, and `page` alerts real people.
 
 Open a shell in the project:
 

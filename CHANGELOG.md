@@ -4,6 +4,23 @@ Rendered by [git-cliff](https://git-cliff.org) from the conventional commits
 behind each tag. `release` rewrites this file in full on every release, so an
 edit made here is lost — edit the commit messages instead.
 
+## v0.2.0 — 2026-11-15
+
+### Features
+
+- **pagerduty**: tell the refusal of a shift-based schedule apart from every other ([6fa9e83](https://github.com/lakinwecker/wokesy/commit/6fa9e83096ff0f640cb5fb4a5c644d63e41cb193))
+- **pagerduty**: add custom shifts on shift-based schedules ([c554f26](https://github.com/lakinwecker/wokesy/commit/c554f26417d382244f43f95ad44e523c3f21d452))
+- **wake**: wake on a shift-based schedule with a custom shift ([dd234ae](https://github.com/lakinwecker/wokesy/commit/dd234ae0e46d840a06354b47df639f9194a51e9b))
+
+### Fixes
+
+- **pagerduty**: say the reason of a refusal once when its errors only repeat the message ([cdf1abf](https://github.com/lakinwecker/wokesy/commit/cdf1abf3b5580ea760e571e2319a9432c66f73c9))
+- **pagerduty**: read a shift-based schedule as a target of an escalation rule ([8c5e4d3](https://github.com/lakinwecker/wokesy/commit/8c5e4d345b906a04d6a5f55323852f76d8aa6543))
+
+### Documentation
+
+- describe waking on legacy and on shift-based schedules ([56403c7](https://github.com/lakinwecker/wokesy/commit/56403c7f267d5b0a062f63523d330dc755e557d7))
+
 ## v0.1.0 — 2026-11-15
 
 ### Features

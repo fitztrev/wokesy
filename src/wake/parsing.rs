@@ -28,6 +28,7 @@ enum Piece {
 }
 
 const CLOSING_PUNCTUATION: [char; 3] = ['.', '!', '?'];
+const QUOTING: [char; 10] = ['`', '"', '\'', '“', '”', '„', '‘', '’', '«', '»'];
 const PAGE: &str = "page";
 const WAKE: [&str; 2] = ["wake", "me"];
 const STOP: &str = "stop";
@@ -55,6 +56,7 @@ pub fn parse(text: &str) -> Command {
         .collect();
     let wording = words.join(" ");
     match words.as_slice() {
+        [first, ..] if first.starts_with(QUOTING) => Command::Unrecognized,
         [first, ..] if *first == PAGE => Command::Page(trouble(text)),
         [wake, me, rest @ ..] if [*wake, *me] == WAKE => Command::Wake(duration(rest)),
         [first, ..] if *first == STOP => Command::Stop,
@@ -69,7 +71,19 @@ pub fn parse(text: &str) -> Command {
 }
 
 fn bare(word: &str) -> &str {
-    word.trim_matches(|character: char| !character.is_alphanumeric())
+    let named = word.trim_start_matches(is_punctuation);
+    let quoted = word
+        .strip_suffix(named)
+        .is_some_and(|before| before.contains(QUOTING));
+    if quoted {
+        word
+    } else {
+        named.trim_end_matches(is_punctuation)
+    }
+}
+
+fn is_punctuation(character: char) -> bool {
+    !character.is_alphanumeric()
 }
 
 fn trouble(text: &str) -> Option<Trouble> {

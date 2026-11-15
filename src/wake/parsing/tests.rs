@@ -135,6 +135,55 @@ fn page_is_only_the_whole_word() {
 }
 
 #[test]
+fn punctuation_after_a_command_word_is_ignored() {
+    for (text, command) in [
+        ("page: db down", page("db down")),
+        ("stop, please", Command::Stop),
+        ("reset!! now", Command::Reset),
+        ("back to: defaults", Command::Reset),
+        ("who? me?", Command::Who),
+        ("wake me, for 4h", wake(4 * HOUR)),
+    ] {
+        assert_eq!(parse(text), command, "{text}");
+    }
+}
+
+#[test]
+fn a_first_word_in_backticks_or_quotes_is_talk_about_a_command() {
+    for text in [
+        "`page` is how you alert on call",
+        "`page db is down`",
+        "```\npage db is down\n```",
+        "\"page\" alerts whoever is on call",
+        "'stop' ends it early",
+        "“wake me for 4 hours” is what I typed",
+        "‘who’ shows the roster",
+        "«reset»",
+        "(`page`) db is down",
+        "`help`",
+        "\"back to defaults\"",
+        "`stop` goes back to the default",
+    ] {
+        assert_eq!(parse(text), Command::Unrecognized, "{text}");
+    }
+}
+
+#[test]
+fn a_command_word_right_after_a_backtick_or_a_quote_is_not_the_command() {
+    for text in [
+        "the `defaults` are fine",
+        "what does \"default\" mean",
+        "is ‘defaults’ a command",
+        "wake `me` for 4h",
+        "on `call`",
+    ] {
+        assert_eq!(parse(text), Command::Unrecognized, "{text}");
+    }
+    assert_eq!(parse("wake me for `4h`"), Command::Wake(None));
+    assert_eq!(parse("page `lila` won't start"), page("`lila` won't start"));
+}
+
+#[test]
 fn stop_is_any_text_starting_with_stop() {
     for text in ["stop waking me", "stop", "stop it", "stop, please"] {
         assert_eq!(parse(text), Command::Stop, "{text}");

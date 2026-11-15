@@ -57,6 +57,14 @@ fn publish(directory: &watch::Sender<Option<Directory>>, matched: Directory) {
         if published.as_ref() == Some(&matched) {
             return false;
         }
+        for one in matched.matched_since(published.as_ref()) {
+            tracing::info!(
+                pagerduty_user = %one.user,
+                chat_user = one.chat_user.0,
+                rule = %one.by,
+                "matched a pagerduty user to a chat user"
+            );
+        }
         *published = Some(matched);
         true
     });

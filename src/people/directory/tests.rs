@@ -277,3 +277,81 @@ fn directories_matched_from_the_same_people_in_another_order_are_equal() {
         Directory::matching(&[bob, alice], &[robert, al], &Links::default())
     );
 }
+
+fn matched(user: &User, chat_user: u64, by: MatchedBy) -> Matched<'_> {
+    Matched {
+        user: &user.id,
+        chat_user: ChatUserId(chat_user),
+        by,
+    }
+}
+
+#[test]
+fn every_match_of_a_first_directory_is_new_and_names_its_rule() {
+    let linked = alice();
+    let by_email = user("PBOB001", "Bob Example", "bob@example.com");
+    let by_name = user("PCAROL1", "Carol Example", "carol@pagerduty.example.com");
+    let unmatched = user("PDAVE01", "Dave Example", "dave@example.com");
+    let members = [
+        member(13, "Robert", &["bob@example.com"]),
+        member(14, "carol example", &["user14@zulip.example.com"]),
+    ];
+
+    let directory = Directory::matching(
+        &[unmatched, by_name.clone(), by_email.clone(), linked.clone()],
+        &members,
+        &links("alice@example.com=12"),
+    );
+
+    assert_eq!(
+        directory.matched_since(None),
+        [
+            matched(&linked, 12, MatchedBy::Link),
+            matched(&by_email, 13, MatchedBy::Email),
+            matched(&by_name, 14, MatchedBy::FullName),
+        ]
+    );
+    assert_eq!(
+        [MatchedBy::Link, MatchedBy::Email, MatchedBy::FullName].map(|by| by.to_string()),
+        ["link", "email", "name"]
+    );
+}
+
+#[test]
+fn only_a_match_that_is_new_or_leads_elsewhere_or_follows_another_rule_is_new_since_the_last() {
+    let bob = user("PBOB001", "Bob Example", "bob@example.com");
+    let carol = user("PCAROL1", "Carol Example", "carol@example.com");
+    let dave = user("PDAVE01", "Dave Example", "dave@example.com");
+    let erin = user("PERIN01", "Erin Example", "erin@example.com");
+    let everyone = [alice(), bob.clone(), carol.clone(), dave.clone(), erin];
+    let before = Directory::matching(
+        &everyone,
+        &[
+            member(12, "Al", &["alice@example.com"]),
+            member(13, "Bob Example", &["user13@zulip.example.com"]),
+            member(14, "Carol Example", &["user14@zulip.example.com"]),
+            member(16, "Erin Example", &["user16@zulip.example.com"]),
+        ],
+        &Links::default(),
+    );
+    let after = Directory::matching(
+        &everyone,
+        &[
+            member(12, "Al", &["alice@example.com"]),
+            member(13, "Bob Example", &["bob@example.com"]),
+            member(24, "Carol Example", &["user24@zulip.example.com"]),
+            member(15, "Dave Example", &["user15@zulip.example.com"]),
+        ],
+        &Links::default(),
+    );
+
+    assert_eq!(
+        after.matched_since(Some(&before)),
+        [
+            matched(&bob, 13, MatchedBy::Email),
+            matched(&carol, 24, MatchedBy::FullName),
+            matched(&dave, 15, MatchedBy::FullName),
+        ]
+    );
+    assert_eq!(after.matched_since(Some(&after)), []);
+}

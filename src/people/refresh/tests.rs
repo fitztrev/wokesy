@@ -9,6 +9,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::*;
 use crate::chat::ChatUserId;
 use crate::pagerduty::UserId;
+use crate::testing::Logs;
 use crate::zulip::{self, BotEmail, InboxConfig, ZulipMembers};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -198,6 +199,57 @@ async fn people_who_changed_are_matched_again_at_a_later_refresh() {
         second.chat_user_of(&user_id("PBOB001")),
         Some(ChatUserId(13))
     );
+}
+
+#[tokio::test]
+async fn each_new_match_is_logged_once_by_its_ids_and_its_rule_and_never_by_an_email_or_a_name() {
+    let (logs, _listening) = Logs::listen();
+    let mut matching = Matching::start(
+        &[
+            alice_and_bob(),
+            users(&[
+                ("PALICE1", "Alice Example", "alice@example.com"),
+                ("PBOB001", "Bob Example", "bob@pagerduty.example.com"),
+                ("PCAROL1", "Carol Example", "carol@pagerduty.example.com"),
+            ]),
+        ],
+        &[
+            only_alice_in_chat(),
+            members(&[
+                (12, "Al", "alice@example.com"),
+                (14, "Carol Example", "user14@zulip.example.com"),
+            ]),
+        ],
+        "bob@pagerduty.example.com=34",
+        OFTEN,
+    )
+    .await;
+
+    matching.next_directory().await;
+    let at_first = logs.text();
+    matching.next_directory().await;
+    let logged = logs.text();
+    let later = logged.strip_prefix(at_first.as_str()).unwrap();
+
+    assert!(
+        at_first.contains("pagerduty_user=PALICE1 chat_user=12 rule=email"),
+        "{at_first}"
+    );
+    assert!(
+        at_first.contains("pagerduty_user=PBOB001 chat_user=34 rule=link"),
+        "{at_first}"
+    );
+    assert!(
+        later.contains("pagerduty_user=PCAROL1 chat_user=14 rule=name"),
+        "{later}"
+    );
+    assert!(
+        !later.contains("PALICE1") && !later.contains("PBOB001"),
+        "{later}"
+    );
+    for secret in ["example.com", "Alice", "Bob", "Carol"] {
+        assert!(!logged.contains(secret), "{secret} is in {logged}");
+    }
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use super::links::Links;
 use super::members::ChatMember;
@@ -9,15 +10,32 @@ use crate::pagerduty::{User, UserId};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Directory {
     users: BTreeMap<UserId, User>,
-    chat_users: BTreeMap<UserId, ChatUserId>,
+    chat_users: BTreeMap<UserId, (ChatUserId, MatchedBy)>,
     pagerduty_users: BTreeMap<ChatUserId, UserId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum MatchedBy {
+pub(super) enum MatchedBy {
     Link,
     Email,
     FullName,
+}
+
+impl fmt::Display for MatchedBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Link => "link",
+            Self::Email => "email",
+            Self::FullName => "name",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Matched<'a> {
+    pub user: &'a UserId,
+    pub chat_user: ChatUserId,
+    pub by: MatchedBy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -87,7 +105,7 @@ impl Directory {
                 .collect(),
             chat_users: matches
                 .iter()
-                .map(|matched| (matched.user.id.clone(), matched.chat_user))
+                .map(|matched| (matched.user.id.clone(), (matched.chat_user, matched.by)))
                 .collect(),
             pagerduty_users: matches
                 .chunk_by(|one, other| one.chat_user == other.chat_user)
@@ -99,7 +117,7 @@ impl Directory {
 
     #[must_use]
     pub fn chat_user_of(&self, user: &UserId) -> Option<ChatUserId> {
-        self.chat_users.get(user).copied()
+        self.chat_users.get(user).map(|(chat_user, _)| *chat_user)
     }
 
     #[must_use]
@@ -110,6 +128,20 @@ impl Directory {
     #[must_use]
     pub fn name_of(&self, user: &UserId) -> Option<&Name> {
         self.users.get(user).map(|user| &user.name)
+    }
+
+    pub(super) fn matched_since(&self, before: Option<&Self>) -> Vec<Matched<'_>> {
+        self.chat_users
+            .iter()
+            .filter(|(user, matched)| {
+                before.and_then(|before| before.chat_users.get(*user)) != Some(*matched)
+            })
+            .map(|(user, (chat_user, by))| Matched {
+                user,
+                chat_user: *chat_user,
+                by: *by,
+            })
+            .collect()
     }
 }
 

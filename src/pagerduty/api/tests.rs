@@ -260,6 +260,39 @@ async fn the_rules_of_an_escalation_policy_become_targets_in_order_and_services_
 }
 
 #[tokio::test]
+async fn a_shift_based_schedule_is_a_schedule_target_like_a_layer_based_one() {
+    let answer = get("/escalation_policies")
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        "escalation_policies": [{
+            "id": "PANZZEQ",
+            "name": "Engineering",
+            "escalation_rules": [{
+                "targets": [
+                    { "id": "PWEZ877", "type": "schedule_v3_reference", "summary": "Shift rota" },
+                    { "id": "PWEZ878", "type": "schedule_v3", "summary": "Other shift rota" },
+                ],
+            }],
+            "services": [{ "id": "PIJ90N7", "type": "service_reference", "summary": "Mail" }],
+        }],
+        "more": false,
+    })));
+    let (_server, api) = pagerduty_answering(answer).await;
+
+    let policies = api.escalation_policies().await.unwrap();
+
+    let rules: Vec<&EscalationRule> = policies.iter().flat_map(|policy| &policy.rules).collect();
+    assert_eq!(
+        rules,
+        [&EscalationRule {
+            targets: vec![
+                Target::Schedule(schedule("PWEZ877", "Shift rota")),
+                Target::Schedule(schedule("PWEZ878", "Other shift rota")),
+            ],
+        }]
+    );
+}
+
+#[tokio::test]
 async fn an_on_call_entry_without_a_schedule_or_an_end_is_a_directly_targeted_person() {
     let request = get("/oncalls")
         .and(query_param("earliest", "true"))

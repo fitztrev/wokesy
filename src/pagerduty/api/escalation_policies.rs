@@ -32,7 +32,12 @@ struct EscalationRuleAnswer {
 enum TargetAnswer {
     #[serde(rename = "user_reference", alias = "user")]
     User { id: UserId, summary: Name },
-    #[serde(rename = "schedule_reference", alias = "schedule")]
+    #[serde(
+        rename = "schedule_reference",
+        alias = "schedule",
+        alias = "schedule_v3_reference",
+        alias = "schedule_v3"
+    )]
     Schedule {
         id: ScheduleId,
         summary: ScheduleName,

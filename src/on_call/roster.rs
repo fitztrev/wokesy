@@ -76,48 +76,6 @@ impl Roster {
         policies.sort_by(|one, other| (&one.name, &one.id).cmp(&(&other.name, &other.id)));
         Self { policies }
     }
-
-    /// ```
-    /// use wokesy::on_call::{ChosenPolicies, Roster};
-    /// use wokesy::pagerduty::{
-    ///     EscalationPolicy, EscalationPolicyId, EscalationPolicyName, EscalationRule, ScheduleId,
-    ///     ScheduleName, ScheduleRef, Target,
-    /// };
-    ///
-    /// let schedule = |id: &str, name: &str| ScheduleRef {
-    ///     id: ScheduleId::try_new(id).unwrap(),
-    ///     name: ScheduleName::try_new(name).unwrap(),
-    /// };
-    /// let policy = EscalationPolicy {
-    ///     id: EscalationPolicyId::try_new("PANZZEQ").unwrap(),
-    ///     name: EscalationPolicyName::try_new("Engineering").unwrap(),
-    ///     rules: vec![
-    ///         EscalationRule { targets: vec![Target::Schedule(schedule("PI7DH85", "Primary rota"))] },
-    ///         EscalationRule { targets: vec![Target::Schedule(schedule("PI7DH86", "Backup rota"))] },
-    ///     ],
-    ///     in_use: true,
-    /// };
-    ///
-    /// let roster = Roster::new(vec![policy], vec![], &ChosenPolicies::default());
-    ///
-    /// assert_eq!(roster.first_line_schedules(), [schedule("PI7DH85", "Primary rota")]);
-    /// ```
-    #[must_use]
-    pub fn first_line_schedules(&self) -> Vec<ScheduleRef> {
-        let mut distinct: Vec<ScheduleRef> = Vec::new();
-        let first_line = self
-            .policies
-            .iter()
-            .flat_map(|policy| &policy.levels)
-            .filter(|level| level.number.into_inner() == FIRST_LINE)
-            .flat_map(|level| &level.schedules);
-        for schedule in first_line {
-            if distinct.iter().all(|known| known.id != schedule.id) {
-                distinct.push(schedule.clone());
-            }
-        }
-        distinct
-    }
 }
 
 impl Policy {

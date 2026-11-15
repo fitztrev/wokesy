@@ -1,28 +1,22 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use humantime::format_duration;
 use time::OffsetDateTime;
 use tokio::time::Instant;
 
-use super::own_overrides::OwnOverride;
+use super::own_overrides::{OwnOverride, WakeSchedule};
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, time_tag};
-use crate::on_call::{Policy, Roster, name_in_chat, policy_in_chat, schedule_in_chat};
-use crate::pagerduty::{ScheduleId, ScheduleRef, UserRef};
+use crate::on_call::{Level, Policy, Roster, name_in_chat, policy_in_chat};
+use crate::pagerduty::{ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
 
 const FOR_HOW_LONG: &str = "For how long? For example: `wake me for 4 hours`.";
-const NOTHING_TO_WAKE_FOR: &str =
-    "No escalation policy is used by a service, so there is nothing to wake you for.";
-const FIRST_NOWHERE: &str = ":warning: I couldn't put you first anywhere.";
+const ON_NO_SCHEDULE: &str = ":warning: I couldn't put you on any schedule.";
 const HANDED_BACK: &str = "PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.";
-const NO_SCHEDULE: &str = "I can't put you first. Level 1 has no schedule to override.";
+const NOT_AT_THE_FIRST_LINE: &str = "you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.";
 const FIRST_LINE: u32 = 1;
 const BETWEEN_NAMES: &str = ", ";
-const BETWEEN_REFUSALS: &str = "; ";
-
-type Refusals = BTreeMap<ScheduleId, String>;
 
 struct Stint {
     starts: OffsetDateTime,
@@ -64,42 +58,45 @@ impl Commands {
                 format_duration(self.config.longest)
             );
         };
-        if roster.policies.is_empty() {
-            return NOTHING_TO_WAKE_FOR.to_owned();
-        }
         self.forget_expired();
-        let schedules = roster.first_line_schedules();
-        let mut refusals = Refusals::new();
-        for schedule in &schedules {
+        let mut lines = Vec::new();
+        let mut on_some_schedule = false;
+        for id in self.config.schedules.ids() {
+            let schedule = WakeSchedule {
+                id: id.clone(),
+                name: name_of(id, roster),
+            };
             let created = self
                 .pagerduty
-                .create_schedule_override(&schedule.id, &user.id, stint.starts, stint.ends)
+                .create_schedule_override(id, &user.id, stint.starts, stint.ends)
                 .await;
-            match created {
-                Ok(id) => {
-                    tracing::info!(schedule = %schedule.id, override_id = %id, user = %user.id, "created an override");
+            let outcome = match created {
+                Ok(override_id) => {
+                    tracing::info!(schedule = %id, override_id = %override_id, user = %user.id, "created an override");
                     self.own_overrides.push(OwnOverride {
                         schedule: schedule.clone(),
-                        id,
+                        id: override_id,
                         user: user.id.clone(),
                         expires: stint.expires,
                     });
+                    on_some_schedule = true;
+                    on_it(id, roster)
                 }
                 Err(error) => {
-                    tracing::warn!(schedule = %schedule.id, user = %user.id, error = %error, cause = ?std::error::Error::source(&error), "could not create an override");
-                    refusals.insert(schedule.id.clone(), error.to_string());
+                    tracing::warn!(schedule = %id, user = %user.id, error = %error, cause = ?std::error::Error::source(&error), "could not create an override");
+                    format!("I couldn't override it: {error}")
                 }
-            }
+            };
+            lines.push(format!("- {}: {outcome}", schedule.in_chat()));
         }
         self.refresh.notify_one();
-        let first_somewhere = refusals.len() < schedules.len();
-        woken(roster, &refusals, first_somewhere.then_some(stint.ends))
+        woken(on_some_schedule.then_some(stint.ends), lines)
     }
 }
 
-fn woken(roster: &Roster, refusals: &Refusals, until: Option<OffsetDateTime>) -> String {
+fn woken(until: Option<OffsetDateTime>, lines: Vec<String>) -> String {
     let heading = until.map_or_else(
-        || FIRST_NOWHERE.to_owned(),
+        || ON_NO_SCHEDULE.to_owned(),
         |until| {
             format!(
                 ":alarm_clock: I'll wake you for anything until {}.",
@@ -108,66 +105,65 @@ fn woken(roster: &Roster, refusals: &Refusals, until: Option<OffsetDateTime>) ->
         },
     );
     std::iter::once(heading)
-        .chain(roster.policies.iter().map(|policy| line(policy, refusals)))
+        .chain(lines)
         .chain(until.map(|_| HANDED_BACK.to_owned()))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn line(policy: &Policy, refusals: &Refusals) -> String {
-    let first_line = policy
-        .levels
+fn name_of(schedule: &ScheduleId, roster: &Roster) -> Option<ScheduleName> {
+    roster
+        .policies
         .iter()
-        .find(|level| level.number.into_inner() == FIRST_LINE);
-    let (schedules, people): (&[ScheduleRef], &[UserRef]) = first_line
-        .map_or((&[], &[]), |level| {
-            (level.schedules.as_slice(), level.people.as_slice())
-        });
-    let outcome = if schedules.is_empty() {
-        NO_SCHEDULE.to_owned()
-    } else {
-        outcome(schedules, people, refusals)
-    };
-    format!("- {}: {outcome}", policy_in_chat(&policy.name))
+        .flat_map(|policy| &policy.levels)
+        .flat_map(|level| &level.schedules)
+        .find(|known| known.id == *schedule)
+        .map(|known| known.name.clone())
 }
 
-fn outcome(schedules: &[ScheduleRef], people: &[UserRef], refusals: &Refusals) -> String {
-    let overridden: Vec<String> = schedules
+fn on_it(schedule: &ScheduleId, roster: &Roster) -> String {
+    let first_lines: Vec<(&Policy, &Level)> = roster
+        .policies
         .iter()
-        .filter(|schedule| !refusals.contains_key(&schedule.id))
-        .map(|schedule| schedule_in_chat(&schedule.name))
-        .collect();
-    let refused: Vec<String> = schedules
-        .iter()
-        .filter_map(|schedule| {
-            let error = refusals.get(&schedule.id)?;
-            Some(format!(
-                "I couldn't override {}: {error}",
-                schedule_in_chat(&schedule.name)
-            ))
+        .filter_map(|policy| {
+            let first_line = policy
+                .levels
+                .iter()
+                .find(|level| level.number.into_inner() == FIRST_LINE)?;
+            first_line
+                .schedules
+                .iter()
+                .any(|target| target.id == *schedule)
+                .then_some((policy, first_line))
         })
         .collect();
-    let mut sentences = Vec::new();
-    if !overridden.is_empty() {
-        sentences.push(format!(
-            "you are first in line through {}.",
-            overridden.join(BETWEEN_NAMES)
-        ));
-        if !people.is_empty() {
-            let names: Vec<String> = people
-                .iter()
-                .map(|person| name_in_chat(&person.name))
-                .collect();
-            sentences.push(format!(
-                "Level 1 also pages {} directly.",
-                names.join(BETWEEN_NAMES)
-            ));
+    if first_lines.is_empty() {
+        return NOT_AT_THE_FIRST_LINE.to_owned();
+    }
+    let policies: Vec<String> = first_lines
+        .iter()
+        .map(|(policy, _)| policy_in_chat(&policy.name))
+        .collect();
+    let mut paged_directly: Vec<&UserId> = Vec::new();
+    let mut names = Vec::new();
+    for person in first_lines.iter().flat_map(|(_, level)| &level.people) {
+        if !paged_directly.contains(&&person.id) {
+            paged_directly.push(&person.id);
+            names.push(name_in_chat(&person.name));
         }
     }
-    if !refused.is_empty() {
-        sentences.push(refused.join(BETWEEN_REFUSALS));
+    let level_1_of = format!(
+        "you are on it. It is level 1 of {}.",
+        policies.join(BETWEEN_NAMES)
+    );
+    if names.is_empty() {
+        level_1_of
+    } else {
+        format!(
+            "{level_1_of} Level 1 also pages {} directly.",
+            names.join(BETWEEN_NAMES)
+        )
     }
-    sentences.join(" ")
 }
 
 #[cfg(test)]

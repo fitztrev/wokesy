@@ -16,13 +16,14 @@ use crate::people::Directory;
 use own_overrides::OwnOverride;
 use paging::Paged;
 
+const WAKING_IS_OFF: &str = "Waking is not set up here. Change the schedule in PagerDuty directly.";
 const STILL_READING: &str = "I'm still reading PagerDuty. Try again in a minute.";
 const UNKNOWN_SENDER: &str = "I don't know which PagerDuty user you are. I match people by email address, then by full name. Ask whoever runs wokesy to link your accounts.";
 const UNRECOGNIZED: &str = "I don't know that command. Send `help` to see the commands I know.";
 const HELP: &str = "\
 I manage who is on call in PagerDuty.
 - `page lichess.org is down` alerts whoever is on call, through PagerDuty. Anyone here can use it. After a page I wait a while before I page again.
-- `wake me for 4 hours` puts you first in line on every escalation policy for that long. PagerDuty hands it back when the time is up.
+- `wake me for 4 hours` puts you on the wake schedule for that long. PagerDuty hands it back when the time is up.
 - `stop waking me` ends that early.
 - `back to defaults` ends every override I made, for you or anyone else, so PagerDuty's own schedules decide again.
 - `who is on call` shows who is on call now.";
@@ -137,6 +138,9 @@ impl Commands {
             }
             (Command::Help, _) => HELP.to_owned(),
             (Command::Unrecognized, _) => UNRECOGNIZED.to_owned(),
+            (Command::Wake(_), _) if self.config.schedules.ids().is_empty() => {
+                WAKING_IS_OFF.to_owned()
+            }
             (Command::Wake(_) | Command::Stop | Command::Reset | Command::Who, None) => {
                 STILL_READING.to_owned()
             }

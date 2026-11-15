@@ -53,7 +53,7 @@ pub struct Answering {
 impl Default for Setup {
     fn default() -> Self {
         Self {
-            config: Config::default(),
+            config: waking_on("PI7DH85"),
             paging: true,
             roster: Some(lichess_alone()),
             directory: Some(alice_and_bob_in_chat()),
@@ -68,6 +68,17 @@ impl Setup {
             roster: Some(roster),
             ..Self::default()
         }
+    }
+
+    pub fn waking_on(schedules: &str, roster: Roster) -> Self {
+        Self {
+            config: waking_on(schedules),
+            ..Self::with_roster(roster)
+        }
+    }
+
+    pub fn waking_on_both_rotas() -> Self {
+        Self::waking_on("PFISHNT, PI7DH85", fishnet_and_lichess())
     }
 
     pub async fn start(self) -> Answering {
@@ -187,6 +198,13 @@ impl Answering {
             .up_to_n_times(1)
             .mount(&self.pagerduty)
             .await;
+    }
+}
+
+pub fn waking_on(schedules: &str) -> Config {
+    Config {
+        schedules: schedules.into(),
+        ..Config::default()
     }
 }
 

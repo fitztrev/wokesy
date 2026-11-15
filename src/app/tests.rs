@@ -85,7 +85,10 @@ fn settings(pagerduty: &FakePagerDuty, zulip: &FakeZulip) -> Config {
             refresh_interval: LONGER_THAN_A_TEST,
             ..people::Config::default()
         },
-        wake: wake::Config::default(),
+        wake: wake::Config {
+            schedules: fake_pagerduty::PRIMARY_ROTA.into(),
+            ..wake::Config::default()
+        },
         status: Some(status::Config {
             channel: channel(STATUS),
         }),
@@ -166,7 +169,7 @@ async fn a_mention_asking_who_is_on_call_is_answered_in_its_topic() {
 }
 
 #[tokio::test]
-async fn wake_me_overrides_the_first_line_schedule_and_the_change_is_announced_straight_away() {
+async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_straight_away() {
     let wokesy = Wokesy::settled().await;
     let mut announcements = wokesy.zulip.posts_in(on_call_topic());
     assert_eq!(announcements.next().await, ON_CALL_NOW);
@@ -198,7 +201,7 @@ async fn wake_me_overrides_the_first_line_schedule_and_the_change_is_announced_s
         answer,
         format!(
             ":alarm_clock: I'll wake you for anything until <time:{until}>.\n\
-             - **Lichess**: you are first in line through **Primary rota**.\n\
+             - **Primary rota**: you are on it. It is level 1 of **Lichess**.\n\
              PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner."
         )
     );

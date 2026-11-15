@@ -5,11 +5,15 @@ use super::*;
 use crate::on_call::Roster;
 use crate::wake::Config;
 use crate::wake::testing::{
-    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, STRANGER, Setup,
-    fishnet_and_lichess, fishnet_rota, in_sysadmin, level, policy, primary_rota, schedule, user,
+    ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, STRANGER, Setup, fishnet_rota,
+    in_sysadmin, level, lichess_alone, policy, primary_rota, schedule, user, waking_on,
 };
 
-const TOURNAMENT_OVERRIDES: &str = "/schedules/PTOURNA/overrides";
+const BACKUP_OVERRIDES: &str = "/schedules/PBACKUP/overrides";
+const SPARE_OVERRIDES: &str = "/schedules/PSPARE1/overrides";
+const WAKING_IS_OFF: &str = "Waking is not set up here. Change the schedule in PagerDuty directly.";
+const HANDED_BACK: &str = "PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.";
+const FORBIDDEN: &str = "pagerduty rejected the request (403 Forbidden): Forbidden";
 
 fn at(time: &Value) -> OffsetDateTime {
     OffsetDateTime::parse(time.as_str().unwrap(), &Rfc3339).unwrap()
@@ -22,6 +26,42 @@ fn whole_second(time: OffsetDateTime) -> OffsetDateTime {
 async fn did_nothing(answering: &Answering) {
     assert_eq!(answering.requests().await, Vec::<String>::new());
     assert!(!answering.was_asked_to_refresh().await);
+}
+
+fn woken_until(created: &Value, lines: &[&str]) -> String {
+    format!(
+        ":alarm_clock: I'll wake you for anything until <time:{}>.\n{}\n{HANDED_BACK}",
+        created["override"]["end"].as_str().unwrap(),
+        lines.join("\n")
+    )
+}
+
+fn three_policies() -> Roster {
+    let dave = user("PDAVE01", "Dave Example");
+    let erin = user("PERIN01", "Erin Example");
+    let frank = user("PFRANK1", "Frank Example");
+    Roster {
+        policies: vec![
+            policy("PFISHNE", "Fishnet", &[level(1, &[fishnet_rota()], &[])]),
+            policy(
+                "PLICHES",
+                "Lichess",
+                &[
+                    level(1, &[primary_rota()], &[dave, erin.clone()]),
+                    level(2, &[schedule("PBACKUP", "Backup rota")], &[]),
+                ],
+            ),
+            policy(
+                "PTOURNA",
+                "Tournaments",
+                &[level(
+                    1,
+                    &[schedule("PTOURNA", "Tournament rota"), primary_rota()],
+                    &[erin, frank],
+                )],
+            ),
+        ],
+    }
 }
 
 #[tokio::test]
@@ -52,42 +92,23 @@ async fn an_override_is_created_for_the_sender_from_now_for_as_long_as_asked() {
     assert_eq!(end - start, Duration::from_mins(90));
     assert_eq!(
         reply,
-        format!(
-            ":alarm_clock: I'll wake you for anything until <time:{}>.\n\
-             - **Lichess**: you are first in line through **Primary rota**.\n\
-             PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.",
-            shift["end"].as_str().unwrap()
+        woken_until(
+            &created,
+            &["- **Primary rota**: you are on it. It is level 1 of **Lichess**."]
         )
     );
 }
 
 #[tokio::test]
-async fn one_override_is_created_on_each_distinct_schedule_at_the_first_line_only() {
-    let backup_rota = schedule("PBACKUP", "Backup rota");
-    let roster = Roster {
-        policies: vec![
-            policy("PFISHNE", "Fishnet", &[level(1, &[fishnet_rota()], &[])]),
-            policy(
-                "PLICHES",
-                "Lichess",
-                &[
-                    level(1, &[primary_rota()], &[]),
-                    level(2, &[backup_rota], &[]),
-                ],
-            ),
-            policy(
-                "PTOURNA",
-                "Tournaments",
-                &[level(1, &[primary_rota()], &[])],
-            ),
-        ],
-    };
-    let mut answering = Setup::with_roster(roster).start().await;
-    answering
-        .creates_overrides(FISHNET_OVERRIDES, &["PQ00001"])
+async fn one_override_is_created_on_each_configured_schedule_in_their_order_and_on_no_other() {
+    let mut answering = Setup::waking_on("PI7DH85, PFISHNT", three_policies())
+        .start()
         .await;
     answering
-        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00002"])
+        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+        .await;
+    answering
+        .creates_overrides(FISHNET_OVERRIDES, &["PQ00002"])
         .await;
 
     let reply = answering
@@ -97,8 +118,8 @@ async fn one_override_is_created_on_each_distinct_schedule_at_the_first_line_onl
     assert_eq!(
         answering.requests().await,
         [
-            format!("POST {FISHNET_OVERRIDES}"),
-            format!("POST {PRIMARY_OVERRIDES}")
+            format!("POST {PRIMARY_OVERRIDES}"),
+            format!("POST {FISHNET_OVERRIDES}")
         ]
     );
     let created = answering.posted().await;
@@ -106,45 +127,27 @@ async fn one_override_is_created_on_each_distinct_schedule_at_the_first_line_onl
     assert_eq!(created[0]["override"]["user"]["id"], "PALICE1");
     assert_eq!(
         reply,
-        format!(
-            ":alarm_clock: I'll wake you for anything until <time:{}>.\n\
-             - **Fishnet**: you are first in line through **Fishnet rota**.\n\
-             - **Lichess**: you are first in line through **Primary rota**.\n\
-             - **Tournaments**: you are first in line through **Primary rota**.\n\
-             PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.",
-            created[0]["override"]["end"].as_str().unwrap()
+        woken_until(
+            &created[0],
+            &[
+                "- **Primary rota**: you are on it. It is level 1 of **Lichess**, **Tournaments**. Level 1 also pages Dave Example, Erin Example, Frank Example directly.",
+                "- **Fishnet rota**: you are on it. It is level 1 of **Fishnet**.",
+            ]
         )
     );
 }
 
 #[tokio::test]
-async fn the_reply_tells_for_each_policy_whether_the_sender_is_first_in_line() {
-    let dave = user("PDAVE01", "Dave Example");
-    let erin = user("PERIN01", "Erin Example");
-    let roster = Roster {
-        policies: vec![
-            policy("PFISHNE", "Fishnet", &[level(1, &[fishnet_rota()], &[])]),
-            policy(
-                "PLICHES",
-                "Lichess",
-                &[level(1, &[primary_rota()], &[dave.clone(), erin])],
-            ),
-            policy("PMODERA", "Moderation", &[level(1, &[], &[dave])]),
-            policy("PNOBODY", "Nobody yet", &[]),
-            policy(
-                "PTOURNA",
-                "Tournaments",
-                &[level(1, &[schedule("PTOURNA", "Tournament rota")], &[])],
-            ),
-        ],
-    };
-    let mut answering = Setup::with_roster(roster).start().await;
-    answering.refuses_overrides(FISHNET_OVERRIDES).await;
-    answering
-        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+async fn the_reply_tells_for_each_schedule_whether_the_sender_is_on_it_and_where_it_is_level_one() {
+    let mut answering = Setup::waking_on("PBACKUP, PFISHNT, PSPARE1", three_policies())
+        .start()
         .await;
     answering
-        .creates_overrides(TOURNAMENT_OVERRIDES, &["PQ00002"])
+        .creates_overrides(BACKUP_OVERRIDES, &["PQ00001"])
+        .await;
+    answering.refuses_overrides(FISHNET_OVERRIDES).await;
+    answering
+        .creates_overrides(SPARE_OVERRIDES, &["PQ00002"])
         .await;
 
     let reply = answering
@@ -154,119 +157,95 @@ async fn the_reply_tells_for_each_policy_whether_the_sender_is_first_in_line() {
     let created = answering.posted().await;
     assert_eq!(
         reply,
-        format!(
-            ":alarm_clock: I'll wake you for anything until <time:{}>.\n\
-             - **Fishnet**: I couldn't override **Fishnet rota**: pagerduty rejected the request (403 Forbidden): Forbidden\n\
-             - **Lichess**: you are first in line through **Primary rota**. Level 1 also pages Dave Example, Erin Example directly.\n\
-             - **Moderation**: I can't put you first. Level 1 has no schedule to override.\n\
-             - **Nobody yet**: I can't put you first. Level 1 has no schedule to override.\n\
-             - **Tournaments**: you are first in line through **Tournament rota**.\n\
-             PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner.",
-            created[1]["override"]["end"].as_str().unwrap()
+        woken_until(
+            &created[0],
+            &[
+                "- **Backup rota**: you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.",
+                &format!("- **Fishnet rota**: I couldn't override it: {FORBIDDEN}"),
+                "- `PSPARE1`: you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.",
+            ]
         )
     );
 }
 
 #[tokio::test]
-async fn a_policy_with_several_schedules_at_the_first_line_tells_which_were_overridden() {
-    let roster = Roster {
-        policies: vec![policy(
-            "PLICHES",
-            "Lichess",
-            &[level(
-                1,
-                &[
-                    primary_rota(),
-                    fishnet_rota(),
-                    schedule("PTOURNA", "Tournament rota"),
-                ],
-                &[user("PDAVE01", "Dave Example")],
-            )],
-        )],
-    };
-    let mut answering = Setup::with_roster(roster).start().await;
+async fn when_no_override_could_be_created_the_reply_promises_nothing() {
+    let mut answering = Setup::waking_on("PI7DH85, PSPARE1", lichess_alone())
+        .start()
+        .await;
+    answering.refuses_overrides(PRIMARY_OVERRIDES).await;
+    answering.refuses_overrides(SPARE_OVERRIDES).await;
+
+    assert_eq!(
+        answering
+            .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+            .await,
+        format!(
+            ":warning: I couldn't put you on any schedule.\n\
+             - **Primary rota**: I couldn't override it: {FORBIDDEN}\n\
+             - `PSPARE1`: I couldn't override it: {FORBIDDEN}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn with_no_policy_in_use_the_configured_schedule_is_still_overridden() {
+    let mut answering = Setup::with_roster(Roster { policies: vec![] })
+        .start()
+        .await;
     answering
         .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
-        .await;
-    answering.refuses_overrides(FISHNET_OVERRIDES).await;
-    answering
-        .creates_overrides(TOURNAMENT_OVERRIDES, &["PQ00002"])
         .await;
 
     let reply = answering
         .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
         .await;
 
-    let line = reply.lines().nth(1).unwrap();
+    let created = answering.posted().await;
     assert_eq!(
-        line,
-        "- **Lichess**: you are first in line through **Primary rota**, **Tournament rota**. Level 1 also pages Dave Example directly. I couldn't override **Fishnet rota**: pagerduty rejected the request (403 Forbidden): Forbidden"
+        reply,
+        woken_until(
+            &created[0],
+            &[
+                "- `PI7DH85`: you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first."
+            ]
+        )
     );
 }
 
 #[tokio::test]
-async fn when_no_override_could_be_created_the_reply_promises_nothing() {
-    let roster = Roster {
-        policies: vec![
-            policy(
-                "PLICHES",
-                "Lichess",
-                &[level(
-                    1,
-                    &[primary_rota()],
-                    &[user("PDAVE01", "Dave Example")],
-                )],
-            ),
-            policy("PMODERA", "Moderation", &[level(1, &[], &[])]),
-        ],
-    };
-    let mut answering = Setup::with_roster(roster).start().await;
-    answering.refuses_overrides(PRIMARY_OVERRIDES).await;
+async fn without_a_configured_schedule_waking_is_off_whoever_asks_and_whatever_is_read() {
+    for setup in [
+        Setup::default(),
+        Setup {
+            roster: None,
+            ..Setup::default()
+        },
+        Setup {
+            directory: None,
+            ..Setup::default()
+        },
+    ] {
+        let setup = Setup {
+            config: Config::default(),
+            ..setup
+        };
+        let mut answering = setup.start().await;
 
-    assert_eq!(
-        answering
-            .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
-            .await,
-        ":warning: I couldn't put you first anywhere.\n\
-         - **Lichess**: I couldn't override **Primary rota**: pagerduty rejected the request (403 Forbidden): Forbidden\n\
-         - **Moderation**: I can't put you first. Level 1 has no schedule to override."
-    );
-}
-
-#[tokio::test]
-async fn with_no_schedule_at_any_first_line_nothing_is_asked_of_pagerduty() {
-    let roster = Roster {
-        policies: vec![policy(
-            "PMODERA",
-            "Moderation",
-            &[level(1, &[], &[user("PDAVE01", "Dave Example")])],
-        )],
-    };
-    let mut answering = Setup::with_roster(roster).start().await;
-
-    assert_eq!(
-        answering
-            .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
-            .await,
-        ":warning: I couldn't put you first anywhere.\n\
-         - **Moderation**: I can't put you first. Level 1 has no schedule to override."
-    );
-    assert_eq!(answering.requests().await, Vec::<String>::new());
-}
-
-#[tokio::test]
-async fn with_no_policy_in_use_there_is_nothing_to_wake_the_sender_for() {
-    let mut answering = Setup::with_roster(Roster { policies: vec![] })
-        .start()
-        .await;
-
-    assert_eq!(
-        answering
-            .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
-            .await,
-        "No escalation policy is used by a service, so there is nothing to wake you for."
-    );
-    did_nothing(&answering).await;
+        for (sender, text) in [
+            (ALICE, "wake me for 4 hours"),
+            (ALICE, "wake me"),
+            (ALICE, "wake me for 8 days"),
+            (STRANGER, "wake me for 4 hours"),
+        ] {
+            assert_eq!(
+                answering.reply(&in_sysadmin(sender, text)).await,
+                WAKING_IS_OFF,
+                "{text}"
+            );
+        }
+        did_nothing(&answering).await;
+    }
 }
 
 #[tokio::test]
@@ -320,7 +299,7 @@ async fn the_longest_duration_allowed_is_configured_and_can_be_asked_for_exactly
     let setup = Setup {
         config: Config {
             longest: Duration::from_hours(2),
-            ..Config::default()
+            ..waking_on("PI7DH85")
         },
         ..Setup::default()
     };
@@ -346,7 +325,7 @@ async fn the_longest_duration_allowed_is_configured_and_can_be_asked_for_exactly
 #[tokio::test]
 async fn the_roster_is_asked_to_refresh_once_overrides_were_tried() {
     for refused in [false, true] {
-        let mut answering = Setup::with_roster(fishnet_and_lichess()).start().await;
+        let mut answering = Setup::waking_on_both_rotas().start().await;
         if refused {
             answering.refuses_overrides(FISHNET_OVERRIDES).await;
             answering.refuses_overrides(PRIMARY_OVERRIDES).await;

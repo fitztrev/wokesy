@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::channels::Channels;
+use super::schedules::Schedules;
 use crate::chat::ChannelName;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -10,6 +11,7 @@ use crate::chat::ChannelName;
 pub struct Config {
     #[serde(with = "humantime_serde")]
     pub longest: Duration,
+    pub schedules: Schedules,
     pub channels: Channels,
     #[serde(with = "humantime_serde")]
     pub page_cooldown: Duration,
@@ -19,6 +21,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             longest: Duration::from_hours(7 * 24),
+            schedules: Schedules::default(),
             channels: Channels::default(),
             page_cooldown: Duration::from_mins(5),
         }

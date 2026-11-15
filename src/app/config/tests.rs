@@ -9,7 +9,7 @@ use crate::chat::{ChannelName, ChatUserId};
 use crate::on_call::ChosenPolicies;
 use crate::pagerduty::EscalationPolicyId;
 use crate::people::{Email, Links};
-use crate::wake::Channels;
+use crate::wake::{Channels, Schedules};
 
 #[expect(clippy::result_large_err)]
 fn in_clean_environment(test: impl FnOnce(&mut Jail)) {
@@ -52,6 +52,7 @@ fn with_only_the_required_variables_set_every_other_setting_takes_its_default() 
         assert_eq!(config.people.links, Links::default());
         assert_eq!(config.people.refresh_interval, Duration::from_mins(5));
         assert_eq!(config.wake.longest, Duration::from_hours(7 * 24));
+        assert_eq!(config.wake.schedules, Schedules::default());
         assert_eq!(config.wake.channels, Channels::default());
         assert_eq!(config.wake.page_cooldown, Duration::from_mins(5));
         assert!(config.status.is_none());
@@ -97,6 +98,7 @@ fn every_variable_a_deployment_can_set_is_recognized() {
         jail.set_env("WOKESY_PEOPLE__LINKS", "alice@example.com=12");
         jail.set_env("WOKESY_PEOPLE__REFRESH_INTERVAL", "10m");
         jail.set_env("WOKESY_WAKE__LONGEST", "2d");
+        jail.set_env("WOKESY_WAKE__SCHEDULES", "PI7DH85, PFISHNT");
         jail.set_env("WOKESY_WAKE__CHANNELS", "sysadmin, on-call");
         jail.set_env("WOKESY_WAKE__PAGE_COOLDOWN", "10m");
         jail.set_env("WOKESY_STATUS__CHANNEL", "wokesy-status");
@@ -141,6 +143,7 @@ fn a_misspelled_variable_in_any_section_is_rejected() {
         "WOKESY_PEOPLE__LINK",
         "WOKESY_WAKE__LONGST",
         "WOKESY_WAKE__CHANNEL",
+        "WOKESY_WAKE__SCHEDULE",
         "WOKESY_WAKE__COOLDOWN",
         "WOKESY_STATUS__CHANEL",
         "WOKESY_HEALTH__RETRYS",
@@ -334,6 +337,24 @@ fn escalation_policies_are_read_with_or_without_whitespace_between_them() {
             );
             assert!(chosen.include(&policy("PT20YPA")), "{policies}");
             assert!(!chosen.include(&policy("POTHER1")), "{policies}");
+        });
+    }
+}
+
+#[test]
+fn wake_schedules_are_read_with_or_without_whitespace_between_them() {
+    for schedules in [
+        "PI7DH85, PFISHNT",
+        "PI7DH85,PFISHNT",
+        " PI7DH85 ,, PFISHNT, ",
+    ] {
+        in_clean_environment(|jail| {
+            jail.set_env("WOKESY_WAKE__SCHEDULES", schedules);
+            assert_eq!(
+                load(jail).unwrap().wake.schedules,
+                Schedules::from("PI7DH85,PFISHNT"),
+                "{schedules}"
+            );
         });
     }
 }

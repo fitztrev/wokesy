@@ -3,13 +3,15 @@ use std::time::Duration;
 use wiremock::ResponseTemplate;
 
 use super::*;
+use crate::on_call::Roster;
 use crate::wake::testing::{
     ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, STRANGER, Setup, directory,
-    fishnet_and_lichess, in_sysadmin,
+    in_sysadmin, lichess_alone,
 };
 
 const NO_OVERRIDE_OF_THE_SENDER: &str = "I have no override of yours on record. I only end overrides I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
 const NO_OVERRIDE_AT_ALL: &str = "Nothing to undo: I have no override of mine on record. I forget them when I restart; anything I made earlier still ends on time by itself.";
+const SPARE_OVERRIDES: &str = "/schedules/PSPARE1/overrides";
 const INTERNAL_ERROR: &str =
     "pagerduty rejected the request (500 Internal Server Error): Internal Server Error";
 
@@ -22,7 +24,7 @@ async fn woken(answering: &mut Answering, sender: ChatUserId) {
 }
 
 async fn alice_and_bob_woken_on_both_rotas() -> Answering {
-    let mut answering = Setup::with_roster(fishnet_and_lichess()).start().await;
+    let mut answering = Setup::waking_on_both_rotas().start().await;
     answering
         .creates_overrides(FISHNET_OVERRIDES, &["PQALICE", "PQBOB00"])
         .await;
@@ -433,7 +435,7 @@ async fn an_override_that_was_refused_is_not_on_record() {
 
 #[tokio::test]
 async fn with_nothing_on_record_as_after_a_restart_stop_and_reset_ask_pagerduty_for_nothing() {
-    let mut answering = Setup::with_roster(fishnet_and_lichess()).start().await;
+    let mut answering = Setup::waking_on_both_rotas().start().await;
 
     assert_eq!(
         answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
@@ -447,4 +449,63 @@ async fn with_nothing_on_record_as_after_a_restart_stop_and_reset_ask_pagerduty_
     );
     assert_eq!(answering.requests().await, Vec::<String>::new());
     assert!(!answering.was_asked_to_refresh().await);
+}
+
+#[tokio::test]
+async fn an_override_on_a_schedule_the_roster_does_not_know_is_ended_and_named_by_its_id() {
+    for (command, reply) in [
+        (
+            "stop waking me",
+            ":zzz: Ended your override on `PSPARE1`. The schedule decides again.",
+        ),
+        (
+            "back to defaults",
+            ":leftwards_arrow_with_hook: Back to the defaults.\n\
+             - `PSPARE1`: ended the override of Alice Example.\n\
+             PagerDuty's own schedules and overrides decide again.",
+        ),
+    ] {
+        let mut answering = Setup::waking_on("PSPARE1", lichess_alone()).start().await;
+        answering
+            .creates_overrides(SPARE_OVERRIDES, &["PSALICE"])
+            .await;
+        woken(&mut answering, ALICE).await;
+        answering
+            .deletes_overrides(SPARE_OVERRIDES, &["PSALICE"])
+            .await;
+
+        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, reply);
+        assert_eq!(
+            requests_after_waking(&answering).await,
+            [delete(SPARE_OVERRIDES, "PSALICE")]
+        );
+    }
+}
+
+#[tokio::test]
+async fn overrides_made_before_the_roster_knew_the_schedule_and_after_are_ended_on_one_line() {
+    let mut answering = Setup {
+        roster: Some(Roster { policies: vec![] }),
+        ..Setup::default()
+    }
+    .start()
+    .await;
+    answering
+        .creates_overrides(PRIMARY_OVERRIDES, &["PRALICE", "PRBOB00"])
+        .await;
+    answering
+        .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE", "PRBOB00"])
+        .await;
+    woken(&mut answering, ALICE).await;
+    answering.roster.send_replace(Some(lichess_alone()));
+    woken(&mut answering, BOB).await;
+
+    assert_eq!(
+        answering
+            .reply(&in_sysadmin(ALICE, "back to defaults"))
+            .await,
+        ":leftwards_arrow_with_hook: Back to the defaults.\n\
+         - `PI7DH85`: ended the override of Alice Example, Bob Example.\n\
+         PagerDuty's own schedules and overrides decide again."
+    );
 }

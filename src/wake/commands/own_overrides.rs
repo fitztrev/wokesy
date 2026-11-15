@@ -4,7 +4,7 @@ use tokio::time::Instant;
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, silenced};
 use crate::on_call::{name_in_chat, schedule_in_chat};
-use crate::pagerduty::{ApiError, OverrideId, ScheduleRef, UserId};
+use crate::pagerduty::{ApiError, OverrideId, ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
 
 const NO_OVERRIDE_OF_YOURS: &str = "I have no override of yours on record. I only end overrides I made myself, and I forget them when I restart. Anything I made earlier still ends on time by itself, or you can remove it in PagerDuty.";
@@ -15,17 +15,31 @@ const BETWEEN_NAMES: &str = ", ";
 const BETWEEN_FAILURES: &str = "; ";
 
 #[derive(Clone, Debug)]
+pub(super) struct WakeSchedule {
+    pub id: ScheduleId,
+    pub name: Option<ScheduleName>,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct OwnOverride {
-    pub schedule: ScheduleRef,
+    pub schedule: WakeSchedule,
     pub id: OverrideId,
     pub user: UserId,
     pub expires: Instant,
 }
 
 struct Ending {
-    schedule: ScheduleRef,
+    schedule: WakeSchedule,
     user: UserId,
     failure: Option<String>,
+}
+
+impl WakeSchedule {
+    pub(super) fn in_chat(&self) -> String {
+        self.name
+            .as_ref()
+            .map_or_else(|| format!("`{}`", silenced(&self.id)), schedule_in_chat)
+    }
 }
 
 impl Commands {
@@ -109,7 +123,7 @@ fn stopped(endings: &[Ending]) -> String {
         endings
             .iter()
             .filter(|ending| ending.failure.is_none())
-            .map(|ending| schedule_in_chat(&ending.schedule.name)),
+            .map(|ending| ending.schedule.in_chat()),
     );
     let ended = (!ended.is_empty()).then(|| {
         format!(
@@ -121,7 +135,7 @@ fn stopped(endings: &[Ending]) -> String {
         let error = ending.failure.as_ref()?;
         Some(format!(
             "I couldn't end your override on {}: {error}",
-            schedule_in_chat(&ending.schedule.name)
+            ending.schedule.in_chat()
         ))
     }));
     ended
@@ -132,16 +146,21 @@ fn stopped(endings: &[Ending]) -> String {
 }
 
 fn back_to_the_defaults(endings: &[Ending], directory: &Directory) -> String {
-    let schedules = distinct(endings.iter().map(|ending| &ending.schedule));
-    let lines = schedules.into_iter().map(|schedule| {
-        let on_schedule: Vec<&Ending> = endings
-            .iter()
-            .filter(|ending| ending.schedule.id == schedule.id)
-            .collect();
+    let mut by_schedule: Vec<(&WakeSchedule, Vec<&Ending>)> = Vec::new();
+    for ending in endings {
+        let listed = by_schedule
+            .iter_mut()
+            .find(|(schedule, _)| schedule.id == ending.schedule.id);
+        match listed {
+            Some((_, on_schedule)) => on_schedule.push(ending),
+            None => by_schedule.push((&ending.schedule, vec![ending])),
+        }
+    }
+    let lines = by_schedule.iter().map(|(schedule, on_schedule)| {
         format!(
             "- {}: {}",
-            schedule_in_chat(&schedule.name),
-            outcome(&on_schedule, directory)
+            schedule.in_chat(),
+            outcome(on_schedule, directory)
         )
     });
     std::iter::once(BACK_TO_THE_DEFAULTS.to_owned())

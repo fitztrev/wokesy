@@ -119,7 +119,7 @@ async fn help_lists_the_commands() {
         Answer::only(
             "I manage who is on call in PagerDuty.\n\
              - `page lichess.org is down` alerts whoever is on call, through PagerDuty. Anyone here can use it. After a page I wait a while before I page again.\n\
-             - `wake me for 4 hours` puts you first in line on every escalation policy for that long. PagerDuty hands it back when the time is up.\n\
+             - `wake me for 4 hours` puts you on the wake schedule for that long. PagerDuty hands it back when the time is up.\n\
              - `stop waking me` ends that early.\n\
              - `back to defaults` ends every override I made, for you or anyone else, so PagerDuty's own schedules decide again.\n\
              - `who is on call` shows who is on call now."
@@ -259,4 +259,5 @@ async fn no_reply_repeats_a_name_from_pagerduty_as_a_mention_that_notifies() {
         assert!(said.contains(silent), "{silent} is missing from {said}");
     }
     assert!(!said.contains("@*"), "{said}");
+    assert!(!said.contains("Waking is not set up"), "{said}");
 }

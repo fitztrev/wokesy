@@ -15,6 +15,8 @@ use crate::pagerduty::{
 use crate::people::{Email, Name};
 use crate::testing::Logs;
 
+const SHIFT_BASED: &str = "This is a shift-based schedule. Use the v3 Schedules API to access it.";
+
 fn api_at(base_url: &str) -> Api {
     let config = Config {
         token: SecretString::from("u+secret"),
@@ -583,6 +585,73 @@ async fn an_override_is_deleted_by_its_id_and_both_204_and_200_are_success() {
         api.delete_schedule_override(&schedule_id("PI7DH85"), &override_id("PQ47DCP"))
             .await
             .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn an_override_refused_because_the_schedule_is_shift_based_is_told_apart_in_either_shape() {
+    for answer in [
+        json!({ "error": { "message": SHIFT_BASED, "code": 3005, "errors": [SHIFT_BASED] } }),
+        json!({ "code": 3005, "message": SHIFT_BASED }),
+    ] {
+        let request =
+            create_override().respond_with(ResponseTemplate::new(400).set_body_json(&answer));
+        let (_server, api) = pagerduty_answering(request).await;
+
+        let error = created_override(&api).await.unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                ApiError::ShiftBasedSchedule { status: StatusCode::BAD_REQUEST, reason }
+                    if reason == SHIFT_BASED
+            ),
+            "{answer}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("pagerduty rejected the request (400 Bad Request): {SHIFT_BASED}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_override_refused_for_another_reason_is_a_rejection_like_any_other() {
+    for (status, answer) in [
+        (
+            400,
+            json!({ "error": { "message": "Invalid Input Provided", "code": 2001 } }),
+        ),
+        (
+            400,
+            json!({ "code": 2001, "message": "Invalid Input Provided" }),
+        ),
+        (
+            400,
+            json!({ "error": { "message": "Invalid Input Provided" } }),
+        ),
+        (
+            400,
+            json!({ "error": { "message": "Invalid Input Provided", "code": "3005" } }),
+        ),
+        (
+            403,
+            json!({ "error": { "message": "Invalid Input Provided", "code": 3005 } }),
+        ),
+    ] {
+        let request =
+            create_override().respond_with(ResponseTemplate::new(status).set_body_json(&answer));
+        let (_server, api) = pagerduty_answering(request).await;
+
+        let error = created_override(&api).await.unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                ApiError::Rejected { reason, .. } if reason == "Invalid Input Provided"
+            ),
+            "{status} {answer}: {error:?}"
+        );
     }
 }
 

@@ -101,7 +101,11 @@ impl Commands {
 }
 
 fn certainly_refused(error: &ApiError) -> bool {
-    matches!(error, ApiError::Rejected { status, .. } if status.is_client_error())
+    matches!(
+        error,
+        ApiError::Rejected { status, .. } | ApiError::ShiftBasedSchedule { status, .. }
+            if status.is_client_error()
+    )
 }
 
 fn woken(until: Option<OffsetDateTime>, lines: Vec<String>) -> String {

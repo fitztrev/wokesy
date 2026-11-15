@@ -32,6 +32,7 @@ pub async fn test_pagerduty_token(pagerduty: &pagerduty::Api) -> Result<(), Fail
     pagerduty.abilities().await.map_err(|error| {
         let outcome = match &error {
             pagerduty::ApiError::Rejected { status, .. }
+            | pagerduty::ApiError::ShiftBasedSchedule { status, .. }
             | pagerduty::ApiError::Unreadable { status, .. } => outcome_of_status(*status),
             pagerduty::ApiError::Request(_) => Outcome::Retry,
         };

@@ -10,7 +10,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use url::Url;
 
 use super::Config;
@@ -18,6 +18,7 @@ use super::Config;
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION_2: &str = "application/vnd.pagerduty+json;version=2";
 const PAGE_SIZE: usize = 100;
+const SHIFT_BASED_SCHEDULE: u32 = 3005;
 const NO_REASON: &str = "no reason given";
 const NO_ID: &str = "unknown";
 
@@ -40,18 +41,30 @@ pub enum ApiError {
     },
     #[error("pagerduty rejected the request ({status}): {reason}")]
     Rejected { status: StatusCode, reason: String },
+    #[error("pagerduty rejected the request ({status}): {reason}")]
+    ShiftBasedSchedule { status: StatusCode, reason: String },
 }
 
 #[derive(Deserialize)]
 pub(super) struct Refusal {
     message: String,
+    code: Option<Code>,
     #[serde(default)]
     errors: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct Refused {
-    error: Refusal,
+#[serde(untagged)]
+enum Code {
+    Number(u32),
+    Other(IgnoredAny),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Refused {
+    Wrapped { error: Refusal },
+    Bare(Refusal),
 }
 
 #[derive(Deserialize)]
@@ -97,6 +110,17 @@ fn id_of_its<'a>(entry: &'a serde_json::Value, reference: &str) -> &'a str {
 }
 
 impl Refusal {
+    fn rejecting(self, status: StatusCode) -> ApiError {
+        let shift_based = status == StatusCode::BAD_REQUEST
+            && matches!(self.code, Some(Code::Number(SHIFT_BASED_SCHEDULE)));
+        let reason = self.reason();
+        if shift_based {
+            ApiError::ShiftBasedSchedule { status, reason }
+        } else {
+            ApiError::Rejected { status, reason }
+        }
+    }
+
     fn reason(self) -> String {
         let beyond_the_message: Vec<String> = self
             .errors
@@ -113,7 +137,10 @@ impl Refusal {
 
 impl From<Refused> for Refusal {
     fn from(refused: Refused) -> Self {
-        refused.error
+        match refused {
+            Refused::Wrapped { error } => error,
+            Refused::Bare(refusal) => refusal,
+        }
     }
 }
 
@@ -175,11 +202,13 @@ where
         return Ok(response);
     }
     let body = response.bytes().await?;
-    let reason = serde_json::from_slice::<R>(&body).map_or_else(
-        |_| status.canonical_reason().unwrap_or(NO_REASON).to_owned(),
-        |refusal| refusal.into().reason(),
-    );
-    Err(ApiError::Rejected { status, reason })
+    Err(serde_json::from_slice::<R>(&body).map_or_else(
+        |_| ApiError::Rejected {
+            status,
+            reason: status.canonical_reason().unwrap_or(NO_REASON).to_owned(),
+        },
+        |refusal| refusal.into().rejecting(status),
+    ))
 }
 
 async fn done(request: RequestBuilder) -> Result<(), ApiError> {

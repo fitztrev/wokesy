@@ -5,9 +5,10 @@ use humantime::format_duration;
 use time::OffsetDateTime;
 use tokio::time::Instant;
 
+use super::backup::backup;
 use super::own_changes::{Kind, Made, OwnChange, WakeSchedule};
-use super::{Commands, UNKNOWN_SENDER};
-use crate::chat::{ChatUserId, time_tag};
+use super::{Commands, FIRST_LINE, UNKNOWN_SENDER};
+use crate::chat::{ChatUserId, in_words, time_tag};
 use crate::on_call::{Level, Policy, Roster, name_in_chat, policy_in_chat};
 use crate::pagerduty::{self, ApiError, ScheduleId, ScheduleName, UserId};
 use crate::people::Directory;
@@ -20,7 +21,6 @@ const ON_IT: &str = "you are on it";
 const ON_IT_ALONGSIDE: &str = "you are on it, alongside whoever the schedule has";
 const NOT_AT_THE_FIRST_LINE: &str =
     "but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.";
-const FIRST_LINE: u32 = 1;
 const BETWEEN_NAMES: &str = ", ";
 
 struct Stint {
@@ -93,8 +93,86 @@ impl Commands {
             lines.push(format!("- {}: {outcome}", schedule.in_chat()));
         }
         self.refresh.notify_one();
-        woken(stint.ends, &made_on_some_schedule, lines)
+        let schedules = self.config.schedules.ids();
+        now_on_call(
+            sender,
+            &user.id,
+            lasting,
+            schedules,
+            &made_on_some_schedule,
+            roster,
+        )
+        .unwrap_or_else(|| woken(stint.ends, &made_on_some_schedule, lines))
     }
+}
+
+fn now_on_call(
+    sender: ChatUserId,
+    user: &UserId,
+    lasting: Duration,
+    schedules: &[ScheduleId],
+    made: &[Kind],
+    roster: &Roster,
+) -> Option<String> {
+    if made.len() != schedules.len() {
+        return None;
+    }
+    let [policy] = roster.policies.as_slice() else {
+        return None;
+    };
+    let first_line = policy
+        .levels
+        .iter()
+        .find(|level| level.number.into_inner() == FIRST_LINE)?;
+    let on_the_first_line = |schedule: &ScheduleId| {
+        first_line
+            .schedules
+            .iter()
+            .any(|target| target.id == *schedule)
+    };
+    if !schedules.iter().all(on_the_first_line) {
+        return None;
+    }
+    let alongside = match others_on(first_line, user, schedules, made)? {
+        0 => String::new(),
+        1 => format!(", together with 1 other at level {FIRST_LINE}"),
+        others => format!(", together with {others} others at level {FIRST_LINE}"),
+    };
+    let on_call = format!(
+        ":alarm_clock: {} is now on call for {}{alongside}.",
+        sender.silent_mention(),
+        in_words(lasting)
+    );
+    let behind = policy
+        .levels
+        .iter()
+        .filter(|level| level.number > first_line.number);
+    Some(match backup(behind) {
+        Some(backup) => format!("{on_call} {backup}"),
+        None => on_call,
+    })
+}
+
+fn others_on(
+    first_line: &Level,
+    user: &UserId,
+    schedules: &[ScheduleId],
+    made: &[Kind],
+) -> Option<usize> {
+    let all = |kind: Kind| made.iter().all(|made| *made == kind);
+    if all(Kind::CustomShift) {
+        let on_call = first_line.shifts.iter();
+        return Some(on_call.filter(|shift| shift.user.id != *user).count());
+    }
+    let everyone_scheduled_is_replaced = all(Kind::Override)
+        && first_line
+            .schedules
+            .iter()
+            .all(|target| schedules.contains(&target.id));
+    everyone_scheduled_is_replaced.then(|| {
+        let paged_directly = first_line.people.iter();
+        paged_directly.filter(|person| person.id != *user).count()
+    })
 }
 
 async fn put_on(

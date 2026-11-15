@@ -312,6 +312,33 @@ pub fn level(number: u32, schedules: &[ScheduleRef], people: &[UserRef]) -> Leve
     }
 }
 
+pub fn with_on_call(level: Level, users: &[UserRef]) -> Level {
+    let shifts = users
+        .iter()
+        .map(|user| Shift {
+            user: user.clone(),
+            ends: None,
+        })
+        .collect();
+    Level { shifts, ..level }
+}
+
+pub fn on_call_at(number: u32, users: &[UserRef]) -> Level {
+    with_on_call(level(number, &[], &[]), users)
+}
+
+pub fn crowd(of: usize) -> Vec<UserRef> {
+    (1..=of)
+        .map(|number| user(&format!("PCROWD{number}"), &format!("Person {number}")))
+        .collect()
+}
+
+pub fn only_policy(levels: &[Level]) -> Roster {
+    Roster {
+        policies: vec![policy("PDEFAUL", "Default", levels)],
+    }
+}
+
 pub fn policy(id: &str, name: &str, levels: &[Level]) -> Policy {
     Policy {
         id: EscalationPolicyId::try_new(id).unwrap(),

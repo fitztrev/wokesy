@@ -5,21 +5,15 @@ use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
+use crate::pagerduty::UserRef;
 use crate::wake::Config;
-use crate::wake::testing::{ALICE, Answering, BOB, ENQUEUE, STRANGER, Setup, in_sysadmin};
+use crate::wake::testing::{
+    ALICE, Answering, BOB, ENQUEUE, STRANGER, Setup, crowd, fishnet_and_lichess, in_sysadmin,
+    on_call_at, only_policy, user,
+};
 
-const PAGED_AND_ON_CALL_NOW: &str = "\
-:rotating_light: Paged. PagerDuty is alerting whoever is on call.
-
-:pager: **On call now:** @_**|13**
-
-```spoiler schedule
-**Lichess · Level 1**
-- @_**|13**
-
-**Lichess · Level 2**
-- Carol Example
-```";
+const PAGED_BOB: &str = ":rotating_light: Paged @_**|13**. Level 2 (1 person) is backup.";
+const PAGED_WHOEVER: &str = ":rotating_light: Paged. PagerDuty is alerting whoever is on call.";
 
 async fn paging() -> Answering {
     let answering = Setup::default().start().await;
@@ -42,6 +36,26 @@ async fn paging_with_cooldown(page_cooldown: Duration) -> Answering {
 
 fn page_by(sender: ChatUserId) -> IncomingMessage {
     in_sysadmin(sender, "page lichess.org is down")
+}
+
+fn alice() -> UserRef {
+    user("PALICE1", "Alice Example")
+}
+
+fn bob() -> UserRef {
+    user("PBOB001", "Bob Example")
+}
+
+fn carol() -> UserRef {
+    user("PCAROL1", "Carol Example")
+}
+
+async fn reply_to_a_page_with(roster: Roster) -> String {
+    let mut answering = Setup::with_roster(roster).start().await;
+    answering.accepts_pages().await;
+    let reply = answering.reply(&page_by(ALICE)).await;
+    assert_eq!(answering.requests().await, ["POST /v2/enqueue"]);
+    reply
 }
 
 async fn summaries(answering: &Answering) -> Vec<String> {
@@ -77,7 +91,7 @@ async fn a_page_alerts_pagerduty_with_the_senders_name_and_what_is_wrong() {
         .answer(&in_sysadmin(STRANGER, "Page Lichess.org is DOWN!"))
         .await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+    assert_eq!(answer.reply.markdown(), PAGED_BOB);
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"]);
 }
 
@@ -112,7 +126,7 @@ async fn every_line_of_what_is_wrong_is_quoted_and_every_mention_in_it_is_silent
          > \n\
          > @_*sysadmins*"
     );
-    assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+    assert_eq!(answer.reply.markdown(), PAGED_BOB);
 }
 
 #[tokio::test]
@@ -160,10 +174,7 @@ async fn a_page_does_not_wait_for_the_roster_or_the_directory() {
 
         let answer = answering.answer(&page_by(ALICE)).await;
 
-        assert_eq!(
-            answer.reply.markdown(),
-            ":rotating_light: Paged. PagerDuty is alerting whoever is on call."
-        );
+        assert_eq!(answer.reply.markdown(), PAGED_WHOEVER);
         assert!(answer.announcement.is_some());
         assert_eq!(
             summaries(&answering).await,
@@ -292,7 +303,7 @@ async fn paging_works_again_once_the_cooldown_is_over_and_a_refused_page_does_no
 
     let answer = answering.answer(&page_by(BOB)).await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+    assert_eq!(answer.reply.markdown(), PAGED_BOB);
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"; 2]);
 }
 
@@ -313,7 +324,7 @@ async fn a_page_that_failed_does_not_start_the_cooldown() {
 
     let answer = answering.answer(&page_by(BOB)).await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+    assert_eq!(answer.reply.markdown(), PAGED_BOB);
     assert_eq!(
         answer.announcement.unwrap().markdown(),
         ":rotating_light: @_**|13** paged on call:\n> lichess.org is down"
@@ -326,8 +337,128 @@ async fn a_cooldown_of_zero_never_refuses_a_page() {
 
     for sender in [ALICE, ALICE, BOB] {
         let answer = answering.answer(&page_by(sender)).await;
-        assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+        assert_eq!(answer.reply.markdown(), PAGED_BOB);
     }
 
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"; 3]);
+}
+
+#[tokio::test]
+async fn the_reply_names_who_is_alerted_first_and_counts_the_levels_behind_them() {
+    let roster = only_policy(&[
+        on_call_at(1, &[bob()]),
+        on_call_at(2, &crowd(3)),
+        on_call_at(3, &crowd(3)),
+    ]);
+
+    assert_eq!(
+        reply_to_a_page_with(roster).await,
+        ":rotating_light: Paged @_**|13**. Level 2 (3 people) and Level 3 (3 people) are backup."
+    );
+}
+
+#[tokio::test]
+async fn when_level_one_is_empty_the_first_level_with_anybody_is_alerted_and_the_reply_says_which()
+{
+    let roster = only_policy(&[
+        on_call_at(1, &[]),
+        on_call_at(2, &[alice(), bob(), carol()]),
+        on_call_at(3, &crowd(3)),
+    ]);
+
+    assert_eq!(
+        reply_to_a_page_with(roster).await,
+        ":rotating_light: Paged @_**|12**, @_**|13** and Carol Example at level 2. Level 3 (3 people) is backup."
+    );
+}
+
+#[tokio::test]
+async fn more_than_three_people_alerted_first_are_counted_at_their_level_and_not_named() {
+    let at_the_second = only_policy(&[
+        on_call_at(1, &[]),
+        on_call_at(2, &crowd(6)),
+        on_call_at(3, &crowd(3)),
+    ]);
+    let at_the_first = only_policy(&[on_call_at(
+        1,
+        &[alice(), bob(), carol(), crowd(1).remove(0)],
+    )]);
+
+    assert_eq!(
+        reply_to_a_page_with(at_the_second).await,
+        ":rotating_light: Paged the 6 people at level 2. Level 3 (3 people) is backup."
+    );
+    assert_eq!(
+        reply_to_a_page_with(at_the_first).await,
+        ":rotating_light: Paged the 4 people at level 1."
+    );
+}
+
+#[tokio::test]
+async fn with_nobody_behind_them_the_reply_ends_after_who_is_alerted() {
+    let alone = only_policy(&[on_call_at(1, &[bob()])]);
+    let two = only_policy(&[on_call_at(1, &[alice(), bob()]), on_call_at(2, &[])]);
+
+    assert_eq!(
+        reply_to_a_page_with(alone).await,
+        ":rotating_light: Paged @_**|13**."
+    );
+    assert_eq!(
+        reply_to_a_page_with(two).await,
+        ":rotating_light: Paged @_**|12** and @_**|13**."
+    );
+}
+
+#[tokio::test]
+async fn a_level_behind_with_nobody_on_call_is_left_out_of_the_backup() {
+    let roster = only_policy(&[
+        on_call_at(1, &[bob()]),
+        on_call_at(2, &[]),
+        on_call_at(3, &[carol()]),
+        on_call_at(4, &crowd(2)),
+        on_call_at(5, &[alice()]),
+    ]);
+
+    assert_eq!(
+        reply_to_a_page_with(roster).await,
+        ":rotating_light: Paged @_**|13**. Level 3 (1 person), Level 4 (2 people) and Level 5 (1 person) are backup."
+    );
+}
+
+#[tokio::test]
+async fn a_page_with_nobody_on_call_at_any_level_is_sent_and_the_reply_warns() {
+    let roster = only_policy(&[on_call_at(1, &[]), on_call_at(2, &[])]);
+
+    assert_eq!(
+        reply_to_a_page_with(roster).await,
+        ":rotating_light: Paged, but nobody is on call at any level. Use PagerDuty directly."
+    );
+}
+
+#[tokio::test]
+async fn with_several_policies_or_none_the_reply_does_not_say_who_is_alerted() {
+    let mut several = fishnet_and_lichess();
+    for policy in &mut several.policies {
+        policy.levels = vec![on_call_at(1, &[bob()]), on_call_at(2, &[carol()])];
+    }
+    let none = Roster { policies: vec![] };
+
+    assert_eq!(reply_to_a_page_with(several).await, PAGED_WHOEVER);
+    assert_eq!(reply_to_a_page_with(none).await, PAGED_WHOEVER);
+}
+
+#[tokio::test]
+async fn a_name_from_pagerduty_that_holds_a_mention_is_named_without_notifying() {
+    let roster = only_policy(&[on_call_at(
+        1,
+        &[
+            user("PEVERY1", "@**all**"),
+            user("PGROUP1", "x @*sysadmins*"),
+        ],
+    )]);
+
+    assert_eq!(
+        reply_to_a_page_with(roster).await,
+        ":rotating_light: Paged @_**all** and x @_*sysadmins*."
+    );
 }

@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use humantime::{FormattedDuration, format_duration};
-use time::OffsetDateTime;
 use tokio::time::Instant;
 
-use super::{Answer, Commands};
+use super::backup::{backup, listed, people};
+use super::{Answer, Commands, FIRST_LINE};
 use crate::chat::{ChatUserId, IncomingMessage, OutgoingMessage, silenced};
-use crate::on_call::{Roster, on_call_now};
+use crate::on_call::{Level, Roster, person_in_chat};
 use crate::pagerduty::{ApiError, Events, Summary, SummaryError};
 use crate::people::{Directory, Name};
 use crate::wake::parsing::Trouble;
@@ -14,6 +14,9 @@ use crate::wake::parsing::Trouble;
 const PAGING_IS_OFF: &str = "Paging is not set up here. Use PagerDuty directly.";
 const NOTHING_TO_TELL: &str = "What should I tell them? For example: `page lichess.org is down`.";
 const PAGED: &str = ":rotating_light: Paged. PagerDuty is alerting whoever is on call.";
+const NOBODY_TO_PAGE: &str =
+    ":rotating_light: Paged, but nobody is on call at any level. Use PagerDuty directly.";
+const MOST_NAMED: usize = 3;
 const LONGEST_SUMMARY: usize = 1024;
 const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
@@ -99,12 +102,43 @@ fn seconds_begun(remaining: Duration) -> u64 {
 }
 
 fn paged(read: Option<&(Roster, Directory)>) -> String {
-    match read {
-        Some((roster, directory)) => format!(
-            "{PAGED}\n\n{}",
-            on_call_now(roster, directory, OffsetDateTime::now_utc())
-        ),
-        None => PAGED.to_owned(),
+    let Some((roster, directory)) = read else {
+        return PAGED.to_owned();
+    };
+    let [policy] = roster.policies.as_slice() else {
+        return PAGED.to_owned();
+    };
+    let Some(first) = policy.alerted_first() else {
+        return NOBODY_TO_PAGE.to_owned();
+    };
+    let paged = format!(":rotating_light: Paged {}.", alerted(first, directory));
+    let behind = policy
+        .levels
+        .iter()
+        .filter(|level| level.number > first.number);
+    match backup(behind) {
+        Some(backup) => format!("{paged} {backup}"),
+        None => paged,
+    }
+}
+
+fn alerted(first: &Level, directory: &Directory) -> String {
+    if first.shifts.len() > MOST_NAMED {
+        return format!(
+            "the {} at level {}",
+            people(first.shifts.len()),
+            first.number
+        );
+    }
+    let names: Vec<String> = first
+        .shifts
+        .iter()
+        .map(|shift| person_in_chat(&shift.user, directory))
+        .collect();
+    if first.number.into_inner() == FIRST_LINE {
+        listed(&names)
+    } else {
+        format!("{} at level {}", listed(&names), first.number)
     }
 }
 

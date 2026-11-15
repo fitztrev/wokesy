@@ -247,9 +247,7 @@ async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_s
     assert_eq!(
         answer,
         format!(
-            ":alarm_clock: I'll wake you for anything until <time:{until}>.\n\
-             - **Primary rota**: you are on it. It is level 1 of **Lichess**.\n\
-             PagerDuty hands it back to the schedule by itself when the time is up. Send `stop waking me` to end it sooner."
+            ":alarm_clock: @_**|{ALICE}** is now on call for 4 hours. Level 2 (1 person) is backup."
         )
     );
     assert_eq!(
@@ -316,9 +314,7 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
     assert_eq!(
         woken,
         format!(
-            ":alarm_clock: I'll wake you for anything until <time:{until}>.\n\
-             - **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**.\n\
-             PagerDuty ends the shift by itself when the time is up. Send `stop waking me` to end it sooner."
+            ":alarm_clock: @_**|{ALICE}** is now on call for 4 hours, together with 1 other at level 1. Level 2 (1 person) is backup."
         )
     );
     assert_eq!(
@@ -403,10 +399,7 @@ async fn a_page_alerts_through_the_events_api_and_is_quoted_in_the_on_call_topic
     );
     assert_eq!(
         answer,
-        format!(
-            ":rotating_light: Paged. PagerDuty is alerting whoever is on call.\n\n{}",
-            on_call_now(&wokesy.pagerduty)
-        )
+        format!(":rotating_light: Paged @_**|{BOB}**. Level 2 (1 person) is backup.")
     );
     assert_eq!(
         announced,
@@ -511,7 +504,10 @@ async fn shutdown_stops_reading_first_and_finishes_the_command_in_hand_before_it
         panic!("expected an answer, an announcement, and a goodbye, got {posted:#?}");
     };
     assert!(outcome.is_ok(), "{outcome:?}");
-    assert!(answer.starts_with(":rotating_light: Paged."), "{answer}");
+    assert_eq!(
+        answer,
+        &format!(":rotating_light: Paged @_**|{BOB}**. Level 2 (1 person) is backup.")
+    );
     assert!(
         announced.starts_with(&format!(":rotating_light: @_**|{SAM}** paged on call:")),
         "{announced}"

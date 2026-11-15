@@ -11,7 +11,7 @@ use crate::wake::testing::{ALICE, Setup, in_sysadmin, message, topic};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const HELP_STARTS: &str = "I manage who is on call in PagerDuty.";
-const PAGED_STARTS: &str = ":rotating_light: Paged.";
+const PAGED_STARTS: &str = ":rotating_light: Paged @_**|13**.";
 const ANNOUNCEMENT: &str = ":rotating_light: @_**|12** paged on call:\n> lichess.org is down";
 
 #[derive(Clone, Debug)]

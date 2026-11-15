@@ -1,3 +1,4 @@
+mod backup;
 mod own_changes;
 mod paging;
 mod waking;
@@ -30,6 +31,7 @@ I manage who is on call in PagerDuty.
 - `back to defaults` ends every override and shift I made, for you or anyone else, so PagerDuty's own schedules decide again.
 - `who is on call` shows who is on call now.";
 const BETWEEN_OPEN_CHANNELS: &str = " or ";
+const FIRST_LINE: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {

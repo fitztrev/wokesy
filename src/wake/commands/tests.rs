@@ -2,7 +2,7 @@ use super::*;
 use crate::on_call::Roster;
 use crate::wake::testing::{
     ALICE, Answering, BOB, ON_CALL_NOW, PRIMARY_OVERRIDES, STRANGER, Setup, channel, direct,
-    directory, in_sysadmin, level, mention_in, policy, schedule, user,
+    directory, in_sysadmin, level, mention_in, policy, schedule, user, with_on_call,
 };
 
 const EVERY_COMMAND: [&str; 7] = [
@@ -214,12 +214,13 @@ async fn a_command_is_answered_from_the_roster_and_the_directory_as_they_are_whe
 #[tokio::test]
 async fn no_reply_repeats_a_name_from_pagerduty_as_a_mention_that_notifies() {
     let rota = schedule("PI7DH85", "@*sysadmins*");
+    let carol = user("PCAROL1", "@**Carol Example**");
+    let first_line = with_on_call(
+        level(1, &[rota], std::slice::from_ref(&carol)),
+        std::slice::from_ref(&carol),
+    );
     let roster = Roster {
-        policies: vec![policy(
-            "PLICHES",
-            "x @**all**",
-            &[level(1, &[rota], &[user("PCAROL1", "@**Carol Example**")])],
-        )],
+        policies: vec![policy("PLICHES", "x @**all**", &[first_line])],
     };
     let setup = Setup {
         directory: Some(directory(&[("PALICE1", "@**everyone**", Some(ALICE))])),
@@ -251,7 +252,7 @@ async fn no_reply_repeats_a_name_from_pagerduty_as_a_mention_that_notifies() {
 
     let said = replies.join("\n");
     for silent in [
-        "**x @_**all****",
+        "**x @_**all** · Level 1**",
         "**@_*sysadmins***",
         "@_**Carol Example**",
         "@_**everyone**",

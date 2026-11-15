@@ -5,11 +5,12 @@ use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
 use crate::on_call::Roster;
+use crate::pagerduty::UserRef;
 use crate::wake::Config;
 use crate::wake::testing::{
     ALICE, Answering, BOB, FISHNET_OVERRIDES, PRIMARY_OVERRIDES, PRIMARY_SHIFTS, STRANGER, Setup,
-    fishnet_rota, in_sysadmin, level, lichess_alone, policy, primary_rota, schedule, user,
-    waking_on,
+    crowd, fishnet_rota, in_sysadmin, level, lichess_alone, on_call_at, only_policy, policy,
+    primary_rota, schedule, user, waking_on, with_on_call,
 };
 
 const BACKUP_OVERRIDES: &str = "/schedules/PBACKUP/overrides";
@@ -105,10 +106,7 @@ async fn an_override_is_created_for_the_sender_from_now_for_as_long_as_asked() {
     assert_eq!(end - start, Duration::from_mins(90));
     assert_eq!(
         reply,
-        woken_until(
-            &created,
-            &["- **Primary rota**: you are on it. It is level 1 of **Lichess**."]
-        )
+        ":alarm_clock: @_**|13** is now on call for 1 hour 30 minutes. Level 2 (1 person) is backup."
     );
 }
 
@@ -501,12 +499,7 @@ async fn on_a_shift_based_schedule_a_custom_shift_is_created_for_the_same_window
     );
     assert_eq!(
         reply,
-        woken_by_a_shift_until(
-            &posted[1],
-            &[
-                "- **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**."
-            ]
-        )
+        ":alarm_clock: @_**|13** is now on call for 1 hour 30 minutes. Level 2 (1 person) is backup."
     );
     assert!(answering.was_asked_to_refresh().await);
 }
@@ -616,4 +609,273 @@ async fn a_custom_shift_that_pagerduty_refused_does_not_exist_and_one_whose_answ
         );
         assert!(answering.was_asked_to_refresh().await);
     }
+}
+
+const FOUR_HOURS: &str = ":alarm_clock: @_**|12** is now on call for 4 hours";
+
+fn alice() -> UserRef {
+    user("PALICE1", "Alice Example")
+}
+
+fn both_rotas_at_level_one() -> Roster {
+    Roster {
+        policies: vec![policy(
+            "PLICHES",
+            "Lichess",
+            &[level(1, &[primary_rota(), fishnet_rota()], &[])],
+        )],
+    }
+}
+
+async fn alice_wakes_for_4_hours(answering: &mut Answering) -> String {
+    let reply = answering
+        .reply(&in_sysadmin(ALICE, "wake me for 4 hours"))
+        .await;
+    assert!(answering.was_asked_to_refresh().await);
+    reply
+}
+
+async fn alice_wakes_by_an_override_with(roster: Roster) -> String {
+    let mut answering = Setup::with_roster(roster).start().await;
+    answering
+        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+        .await;
+    alice_wakes_for_4_hours(&mut answering).await
+}
+
+async fn alice_wakes_by_a_custom_shift_with(roster: Roster) -> String {
+    let mut answering = Setup::with_roster(roster).start().await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCS0001"])
+        .await;
+    alice_wakes_for_4_hours(&mut answering).await
+}
+
+#[tokio::test]
+async fn a_sender_put_on_level_one_of_the_only_policy_is_told_in_one_line_with_the_levels_behind() {
+    let roster = only_policy(&[
+        level(1, &[primary_rota()], &[]),
+        on_call_at(2, &crowd(3)),
+        on_call_at(3, &crowd(3)),
+    ]);
+
+    assert_eq!(
+        alice_wakes_by_an_override_with(roster.clone()).await,
+        format!("{FOUR_HOURS}. Level 2 (3 people) and Level 3 (3 people) are backup.")
+    );
+    assert_eq!(
+        alice_wakes_by_a_custom_shift_with(roster).await,
+        format!("{FOUR_HOURS}. Level 2 (3 people) and Level 3 (3 people) are backup.")
+    );
+}
+
+#[tokio::test]
+async fn with_nobody_behind_the_sender_the_one_line_ends_after_the_duration() {
+    let roster = only_policy(&[level(1, &[primary_rota()], &[]), on_call_at(2, &[])]);
+
+    assert_eq!(
+        alice_wakes_by_an_override_with(roster).await,
+        format!("{FOUR_HOURS}.")
+    );
+}
+
+#[tokio::test]
+async fn on_a_shift_based_schedule_the_one_line_counts_who_else_is_on_call_at_level_one() {
+    for (on_call, together) in [
+        (crowd(5), ", together with 5 others at level 1"),
+        (crowd(1), ", together with 1 other at level 1"),
+        (
+            vec![alice(), user("PDAVE01", "Dave Example")],
+            ", together with 1 other at level 1",
+        ),
+        (vec![alice()], ""),
+    ] {
+        let roster = only_policy(&[
+            with_on_call(level(1, &[primary_rota()], &[]), &on_call),
+            on_call_at(2, &crowd(3)),
+        ]);
+
+        assert_eq!(
+            alice_wakes_by_a_custom_shift_with(roster).await,
+            format!("{FOUR_HOURS}{together}. Level 2 (3 people) is backup.")
+        );
+    }
+}
+
+#[tokio::test]
+async fn on_a_legacy_schedule_who_was_scheduled_is_replaced_and_only_who_is_paged_directly_is_counted()
+ {
+    let dave = user("PDAVE01", "Dave Example");
+    let scheduled = user("PBOB001", "Bob Example");
+    let replaced = only_policy(&[with_on_call(
+        level(1, &[primary_rota()], &[]),
+        std::slice::from_ref(&scheduled),
+    )]);
+    let beside_dave = only_policy(&[with_on_call(
+        level(1, &[primary_rota()], &[dave.clone(), alice()]),
+        &[scheduled, dave, alice()],
+    )]);
+
+    assert_eq!(
+        alice_wakes_by_an_override_with(replaced).await,
+        format!("{FOUR_HOURS}.")
+    );
+    assert_eq!(
+        alice_wakes_by_an_override_with(beside_dave).await,
+        format!("{FOUR_HOURS}, together with 1 other at level 1.")
+    );
+}
+
+#[tokio::test]
+async fn the_one_line_tells_the_duration_in_words() {
+    for (asked, told) in [
+        ("wake me for 30 minutes", "30 minutes"),
+        ("wake me for an hour", "1 hour"),
+        ("wake me for 4h", "4 hours"),
+        ("wake me for 90 minutes", "1 hour 30 minutes"),
+        ("wake me for 1 day", "1 day"),
+        ("wake me for 2 days", "2 days"),
+        ("wake me for 1d 2h 5m", "1 day 2 hours 5 minutes"),
+    ] {
+        let mut answering = Setup::default().start().await;
+        answering
+            .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+            .await;
+
+        assert_eq!(
+            answering.reply(&in_sysadmin(ALICE, asked)).await,
+            format!(
+                ":alarm_clock: @_**|12** is now on call for {told}. Level 2 (1 person) is backup."
+            ),
+            "{asked}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn when_every_schedule_is_at_level_one_of_the_only_policy_and_changed_alike_the_reply_is_one_line()
+ {
+    let mut answering = Setup::waking_on("PI7DH85, PFISHNT", both_rotas_at_level_one())
+        .start()
+        .await;
+    answering
+        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+        .await;
+    answering
+        .creates_overrides(FISHNET_OVERRIDES, &["PQ00002"])
+        .await;
+
+    assert_eq!(
+        alice_wakes_for_4_hours(&mut answering).await,
+        format!("{FOUR_HOURS}.")
+    );
+}
+
+#[tokio::test]
+async fn a_schedule_that_could_not_be_changed_keeps_the_reply_for_each_schedule() {
+    for (answer, outcome) in [
+        (
+            ResponseTemplate::new(403)
+                .set_body_json(json!({ "error": { "message": "Forbidden", "code": 2010 } })),
+            format!("I couldn't override it: {FORBIDDEN}"),
+        ),
+        (
+            ResponseTemplate::new(500),
+            "I couldn't confirm the override: pagerduty rejected the request (500 Internal Server Error): Internal Server Error. It may exist; check PagerDuty.".to_owned(),
+        ),
+    ] {
+        let mut answering = Setup::waking_on("PI7DH85, PFISHNT", both_rotas_at_level_one())
+            .start()
+            .await;
+        answering
+            .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+            .await;
+        answers_a_create(&answering, FISHNET_OVERRIDES, answer).await;
+
+        let reply = alice_wakes_for_4_hours(&mut answering).await;
+
+        let created = answering.posted().await;
+        assert_eq!(
+            reply,
+            woken_until(
+                &created[0],
+                &[
+                    "- **Primary rota**: you are on it. It is level 1 of **Lichess**.",
+                    &format!("- **Fishnet rota**: {outcome}"),
+                ]
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_schedule_that_is_not_at_level_one_keeps_the_reply_for_each_schedule() {
+    let mut answering = Setup::waking_on("PI7DH85, PSPARE1", lichess_alone())
+        .start()
+        .await;
+    answering
+        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+        .await;
+    answering
+        .creates_overrides(SPARE_OVERRIDES, &["PQ00002"])
+        .await;
+
+    let reply = alice_wakes_for_4_hours(&mut answering).await;
+
+    let created = answering.posted().await;
+    assert_eq!(
+        reply,
+        woken_until(
+            &created[0],
+            &[
+                "- **Primary rota**: you are on it. It is level 1 of **Lichess**.",
+                "- `PSPARE1`: you are on it, but it is not at level 1 of any escalation policy in use, so alerts may not reach you first.",
+            ]
+        )
+    );
+}
+
+#[tokio::test]
+async fn schedules_of_both_kinds_at_level_one_keep_the_reply_for_each_schedule() {
+    let mut answering = Setup::waking_on("PI7DH85, PFISHNT", both_rotas_at_level_one())
+        .start()
+        .await;
+    answering.is_shift_based(PRIMARY_OVERRIDES).await;
+    answering
+        .creates_custom_shifts(PRIMARY_SHIFTS, &["PCS0001"])
+        .await;
+    answering
+        .creates_overrides(FISHNET_OVERRIDES, &["PQ00001"])
+        .await;
+
+    let reply = alice_wakes_for_4_hours(&mut answering).await;
+
+    let posted = answering.posted().await;
+    assert_eq!(
+        reply,
+        woken_until(
+            &posted[2],
+            &[
+                "- **Primary rota**: you are on it, alongside whoever the schedule has. It is level 1 of **Lichess**.",
+                "- **Fishnet rota**: you are on it. It is level 1 of **Lichess**.",
+            ]
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_override_beside_a_schedule_wokesy_does_not_change_keeps_the_reply_for_each_schedule() {
+    let reply = alice_wakes_by_an_override_with(both_rotas_at_level_one()).await;
+
+    assert!(
+        reply.ends_with(&format!(
+            "\n- **Primary rota**: you are on it. It is level 1 of **Lichess**.\n{HANDED_BACK}"
+        )),
+        "{reply}"
+    );
+    assert!(
+        reply.starts_with(":alarm_clock: I'll wake you for anything until <time:"),
+        "{reply}"
+    );
 }

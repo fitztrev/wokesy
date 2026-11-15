@@ -91,7 +91,7 @@ async fn a_page_alerts_pagerduty_with_the_senders_name_and_what_is_wrong() {
         .answer(&in_sysadmin(STRANGER, "Page Lichess.org is DOWN!"))
         .await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_BOB);
+    assert_eq!(answer.reply, Reply::message(PAGED_BOB));
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"]);
 }
 
@@ -126,7 +126,7 @@ async fn every_line_of_what_is_wrong_is_quoted_and_every_mention_in_it_is_silent
          > \n\
          > @_*sysadmins*"
     );
-    assert_eq!(answer.reply.markdown(), PAGED_BOB);
+    assert_eq!(answer.reply, Reply::message(PAGED_BOB));
 }
 
 #[tokio::test]
@@ -174,7 +174,7 @@ async fn a_page_does_not_wait_for_the_roster_or_the_directory() {
 
         let answer = answering.answer(&page_by(ALICE)).await;
 
-        assert_eq!(answer.reply.markdown(), PAGED_WHOEVER);
+        assert_eq!(answer.reply, Reply::message(PAGED_WHOEVER));
         assert!(answer.announcement.is_some());
         assert_eq!(
             summaries(&answering).await,
@@ -303,7 +303,7 @@ async fn paging_works_again_once_the_cooldown_is_over_and_a_refused_page_does_no
 
     let answer = answering.answer(&page_by(BOB)).await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_BOB);
+    assert_eq!(answer.reply, Reply::message(PAGED_BOB));
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"; 2]);
 }
 
@@ -324,7 +324,7 @@ async fn a_page_that_failed_does_not_start_the_cooldown() {
 
     let answer = answering.answer(&page_by(BOB)).await;
 
-    assert_eq!(answer.reply.markdown(), PAGED_BOB);
+    assert_eq!(answer.reply, Reply::message(PAGED_BOB));
     assert_eq!(
         answer.announcement.unwrap().markdown(),
         ":rotating_light: @_**|13** paged on call:\n> lichess.org is down"
@@ -337,7 +337,7 @@ async fn a_cooldown_of_zero_never_refuses_a_page() {
 
     for sender in [ALICE, ALICE, BOB] {
         let answer = answering.answer(&page_by(sender)).await;
-        assert_eq!(answer.reply.markdown(), PAGED_BOB);
+        assert_eq!(answer.reply, Reply::message(PAGED_BOB));
     }
 
     assert_eq!(answering.requests().await, ["POST /v2/enqueue"; 3]);

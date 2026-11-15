@@ -7,7 +7,7 @@ use tokio::sync::{Notify, watch};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Answer, Commands, Config};
+use super::{Answer, Commands, Config, Reply};
 use crate::chat::{
     ChannelName, ChatUserId, CommandText, Conversation, IncomingMessage, MessageId, TopicName,
 };
@@ -128,7 +128,22 @@ impl Answering {
     }
 
     pub async fn reply(&mut self, message: &IncomingMessage) -> String {
-        self.answer(message).await.reply.markdown().to_owned()
+        as_a_message(self.answer(message).await.reply)
+    }
+
+    pub async fn acknowledged(&mut self, message: &IncomingMessage) -> String {
+        match self.answer(message).await.reply {
+            Reply::Acknowledgement { otherwise } => otherwise.markdown().to_owned(),
+            Reply::Message(message) => panic!("not acknowledged, but: {}", message.markdown()),
+        }
+    }
+
+    pub async fn said_either_way(&mut self, message: &IncomingMessage) -> String {
+        match self.answer(message).await.reply {
+            Reply::Message(said) | Reply::Acknowledgement { otherwise: said } => {
+                said.markdown().to_owned()
+            }
+        }
     }
 
     pub async fn requests(&self) -> Vec<String> {
@@ -228,6 +243,15 @@ impl Answering {
             .up_to_n_times(1)
             .mount(&self.pagerduty)
             .await;
+    }
+}
+
+pub fn as_a_message(reply: Reply) -> String {
+    match reply {
+        Reply::Message(message) => message.markdown().to_owned(),
+        Reply::Acknowledgement { otherwise } => {
+            panic!("acknowledged instead of: {}", otherwise.markdown())
+        }
     }
 }
 

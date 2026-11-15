@@ -34,8 +34,14 @@ const BETWEEN_OPEN_CHANNELS: &str = " or ";
 const FIRST_LINE: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reply {
+    Message(OutgoingMessage),
+    Acknowledgement { otherwise: OutgoingMessage },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
-    pub reply: OutgoingMessage,
+    pub reply: Reply,
     pub announcement: Option<OutgoingMessage>,
 }
 
@@ -53,10 +59,22 @@ pub struct Commands {
     shift_based: BTreeSet<pagerduty::ScheduleId>,
 }
 
+impl Reply {
+    fn message(markdown: impl Into<String>) -> Self {
+        Self::Message(OutgoingMessage::new(markdown.into()))
+    }
+
+    fn acknowledgement(otherwise: impl Into<String>) -> Self {
+        Self::Acknowledgement {
+            otherwise: OutgoingMessage::new(otherwise.into()),
+        }
+    }
+}
+
 impl Answer {
     fn only(reply: impl Into<String>) -> Self {
         Self {
-            reply: OutgoingMessage::new(reply.into()),
+            reply: Reply::message(reply),
             announcement: None,
         }
     }
@@ -93,10 +111,11 @@ impl Commands {
     /// use tokio::sync::{Notify, watch};
     /// use wokesy::chat::{
     ///     ChannelName, ChatUserId, CommandText, Conversation, IncomingMessage, MessageId,
+    ///     OutgoingMessage,
     /// };
     /// use wokesy::pagerduty;
     /// use wokesy::people::Name;
-    /// use wokesy::wake::{Commands, Config};
+    /// use wokesy::wake::{Commands, Config, Reply};
     ///
     /// let pagerduty = pagerduty::Config {
     ///     token: "secret".into(),
@@ -128,9 +147,10 @@ impl Commands {
     /// let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     /// let answer = runtime.block_on(commands.answer(&in_private));
     ///
+    /// let pointer = "I only take commands in the open, in #**sysadmin**. Mention me there.";
     /// assert_eq!(
-    ///     answer.reply.markdown(),
-    ///     "I only take commands in the open, in #**sysadmin**. Mention me there."
+    ///     answer.reply,
+    ///     Reply::Message(OutgoingMessage::new(pointer.to_owned()))
     /// );
     /// assert_eq!(answer.announcement, None);
     /// ```
@@ -142,13 +162,13 @@ impl Commands {
             (Command::Page(trouble), read) => {
                 return self.page(message, trouble, read.as_ref()).await;
             }
-            (Command::Help, _) => HELP.to_owned(),
-            (Command::Unrecognized, _) => UNRECOGNIZED.to_owned(),
+            (Command::Help, _) => Reply::message(HELP),
+            (Command::Unrecognized, _) => Reply::message(UNRECOGNIZED),
             (Command::Wake(_), _) if self.config.schedules.ids().is_empty() => {
-                WAKING_IS_OFF.to_owned()
+                Reply::message(WAKING_IS_OFF)
             }
             (Command::Wake(_) | Command::Stop | Command::Reset | Command::Who, None) => {
-                STILL_READING.to_owned()
+                Reply::message(STILL_READING)
             }
             (Command::Wake(lasting), Some((roster, directory))) => {
                 self.wake(message.sender, lasting, &roster, &directory)
@@ -157,10 +177,13 @@ impl Commands {
             (Command::Stop, Some((_, directory))) => self.stop(message.sender, &directory).await,
             (Command::Reset, Some((_, directory))) => self.reset(message.sender, &directory).await,
             (Command::Who, Some((roster, directory))) => {
-                on_call_now(&roster, &directory, OffsetDateTime::now_utc())
+                Reply::message(on_call_now(&roster, &directory, OffsetDateTime::now_utc()))
             }
         };
-        Answer::only(reply)
+        Answer {
+            reply,
+            announcement: None,
+        }
     }
 
     fn takes_commands_in(&self, conversation: &Conversation) -> bool {

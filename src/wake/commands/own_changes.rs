@@ -1,7 +1,7 @@
 use reqwest::StatusCode;
 use tokio::time::Instant;
 
-use super::{Commands, UNKNOWN_SENDER};
+use super::{Commands, Reply, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, silenced};
 use crate::on_call::{name_in_chat, schedule_in_chat};
 use crate::pagerduty::{ApiError, CustomShiftId, OverrideId, ScheduleId, ScheduleName, UserId};
@@ -94,24 +94,24 @@ impl Commands {
         self.own_changes.retain(|own| own.expires > now);
     }
 
-    pub(super) async fn stop(&mut self, sender: ChatUserId, directory: &Directory) -> String {
+    pub(super) async fn stop(&mut self, sender: ChatUserId, directory: &Directory) -> Reply {
         let sender = directory.pagerduty_user_of(sender).map(|user| &user.id);
         let endings = self.end(|own| Some(&own.user) == sender).await;
         if endings.is_empty() {
-            return NOTHING_OF_YOURS.to_owned();
+            return Reply::message(NOTHING_OF_YOURS);
         }
-        stopped(&endings)
+        reply_after(&endings, stopped(&endings))
     }
 
-    pub(super) async fn reset(&mut self, sender: ChatUserId, directory: &Directory) -> String {
+    pub(super) async fn reset(&mut self, sender: ChatUserId, directory: &Directory) -> Reply {
         if directory.pagerduty_user_of(sender).is_none() {
-            return UNKNOWN_SENDER.to_owned();
+            return Reply::message(UNKNOWN_SENDER);
         }
         let endings = self.end(|_| true).await;
         if endings.is_empty() {
-            return NOTHING_TO_UNDO.to_owned();
+            return Reply::message(NOTHING_TO_UNDO);
         }
-        back_to_the_defaults(&endings, directory)
+        reply_after(&endings, back_to_the_defaults(&endings, directory))
     }
 
     async fn end(&mut self, chosen: impl Fn(&OwnChange) -> bool) -> Vec<Ending> {
@@ -165,6 +165,14 @@ impl Commands {
             }
             answered => answered,
         }
+    }
+}
+
+fn reply_after(endings: &[Ending], in_words: String) -> Reply {
+    if endings.iter().all(|ending| ending.failure.is_none()) {
+        Reply::acknowledgement(in_words)
+    } else {
+        Reply::message(in_words)
     }
 }
 

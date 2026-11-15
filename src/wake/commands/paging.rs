@@ -4,7 +4,7 @@ use humantime::{FormattedDuration, format_duration};
 use tokio::time::Instant;
 
 use super::backup::{backup, listed, people};
-use super::{Answer, Commands, FIRST_LINE};
+use super::{Answer, Commands, FIRST_LINE, Reply};
 use crate::chat::{ChatUserId, IncomingMessage, OutgoingMessage, silenced};
 use crate::on_call::{Level, Roster, person_in_chat};
 use crate::pagerduty::{ApiError, Events, Summary, SummaryError};
@@ -62,7 +62,7 @@ impl Commands {
         });
         tracing::info!(sender = message.sender.0, "paged whoever is on call");
         Answer {
-            reply: OutgoingMessage::new(paged(read)),
+            reply: Reply::message(paged(read)),
             announcement: Some(OutgoingMessage::new(announcement(message.sender, &trouble))),
         }
     }

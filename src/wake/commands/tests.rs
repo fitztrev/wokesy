@@ -247,7 +247,11 @@ async fn no_reply_repeats_a_name_from_pagerduty_as_a_mention_that_notifies() {
         "back to defaults",
         "wake me for 4 hours",
     ] {
-        replies.push(answering.reply(&in_sysadmin(ALICE, command)).await);
+        replies.push(
+            answering
+                .said_either_way(&in_sysadmin(ALICE, command))
+                .await,
+        );
     }
 
     let said = replies.join("\n");

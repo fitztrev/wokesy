@@ -16,10 +16,10 @@ const INTERNAL_ERROR: &str =
     "pagerduty rejected the request (500 Internal Server Error): Internal Server Error";
 
 async fn woken(answering: &mut Answering, sender: ChatUserId) {
-    let reply = answering
-        .reply(&in_sysadmin(sender, "wake me for 4 hours"))
+    let said = answering
+        .said_either_way(&in_sysadmin(sender, "wake me for 4 hours"))
         .await;
-    assert!(reply.starts_with(":alarm_clock:"), "{reply}");
+    assert!(said.starts_with(":alarm_clock:"), "{said}");
     assert!(answering.was_asked_to_refresh().await);
 }
 
@@ -91,10 +91,12 @@ async fn stop_ends_only_the_overrides_made_for_the_sender_by_their_ids() {
         .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE"])
         .await;
 
-    let reply = answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+    let otherwise = answering
+        .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+        .await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":zzz: Ended your override on **Fishnet rota**, **Primary rota**. The schedule decides again."
     );
     assert_eq!(
@@ -116,12 +118,14 @@ async fn after_someone_else_stopped_the_senders_own_overrides_are_still_on_recor
     answering
         .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE", "PRBOB00"])
         .await;
-    answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+    answering
+        .answer(&in_sysadmin(ALICE, "stop waking me"))
+        .await;
 
-    let reply = answering.reply(&in_sysadmin(BOB, "stop")).await;
+    let otherwise = answering.acknowledged(&in_sysadmin(BOB, "stop")).await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":zzz: Ended your override on **Fishnet rota**, **Primary rota**. The schedule decides again."
     );
     assert_eq!(
@@ -141,7 +145,9 @@ async fn an_ended_override_is_forgotten() {
     answering
         .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE"])
         .await;
-    answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+    answering
+        .answer(&in_sysadmin(ALICE, "stop waking me"))
+        .await;
     assert!(answering.was_asked_to_refresh().await);
 
     assert_eq!(
@@ -173,10 +179,12 @@ async fn every_time_the_sender_was_woken_is_ended() {
         .deletes_overrides(PRIMARY_OVERRIDES, &["PRFIRST", "PRSECND"])
         .await;
 
-    let reply = answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+    let otherwise = answering
+        .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+        .await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":zzz: Ended your override on **Primary rota**. The schedule decides again."
     );
     assert_eq!(
@@ -198,10 +206,12 @@ async fn reset_ends_every_override_on_record_whoever_it_is_for() {
         .deletes_overrides(PRIMARY_OVERRIDES, &["PRALICE", "PRBOB00"])
         .await;
 
-    let reply = answering.reply(&in_sysadmin(BOB, "back to defaults")).await;
+    let otherwise = answering
+        .acknowledged(&in_sysadmin(BOB, "back to defaults"))
+        .await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - **Fishnet rota**: ended the override of Alice Example, Bob Example.\n\
          - **Primary rota**: ended the override of Alice Example, Bob Example.\n\
@@ -243,7 +253,9 @@ async fn reset_is_refused_to_a_sender_who_is_no_known_pagerduty_user() {
     assert!(!answering.was_asked_to_refresh().await);
 
     assert_eq!(
-        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        answering
+            .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+            .await,
         ":zzz: Ended your override on **Primary rota**. The schedule decides again."
     );
 }
@@ -275,7 +287,7 @@ async fn reset_names_by_their_pagerduty_id_a_person_the_directory_no_longer_know
         .send_replace(Some(directory(&[("PBOB001", "Bob Example", Some(BOB))])));
 
     assert_eq!(
-        answering.reply(&in_sysadmin(BOB, "reset")).await,
+        answering.acknowledged(&in_sysadmin(BOB, "reset")).await,
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - **Primary rota**: ended the override of PALICE1.\n\
          PagerDuty's own schedules and overrides decide again."
@@ -301,7 +313,10 @@ async fn an_override_someone_already_removed_in_pagerduty_counts_as_ended() {
             .answers_a_delete(PRIMARY_OVERRIDES, "PRALICE", ResponseTemplate::new(404))
             .await;
 
-        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, reply);
+        assert_eq!(
+            answering.acknowledged(&in_sysadmin(ALICE, command)).await,
+            reply
+        );
         assert_eq!(
             answering.reply(&in_sysadmin(ALICE, command)).await,
             if command.starts_with("stop") {
@@ -339,7 +354,9 @@ async fn an_override_that_could_not_be_ended_stays_on_record_so_stop_can_be_trie
     );
     assert!(answering.was_asked_to_refresh().await);
     assert_eq!(
-        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        answering
+            .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+            .await,
         ":zzz: Ended your override on **Fishnet rota**. The schedule decides again."
     );
     assert_eq!(
@@ -391,7 +408,7 @@ async fn an_override_that_could_not_be_ended_stays_on_record_so_reset_can_be_tri
     );
     assert_eq!(
         answering
-            .reply(&in_sysadmin(ALICE, "back to defaults"))
+            .acknowledged(&in_sysadmin(ALICE, "back to defaults"))
             .await,
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - **Fishnet rota**: ended the override of Bob Example.\n\
@@ -433,7 +450,9 @@ async fn an_override_is_still_ended_just_before_its_time_is_up() {
     tokio::time::resume();
 
     assert_eq!(
-        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        answering
+            .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+            .await,
         ":zzz: Ended your override on **Primary rota**. The schedule decides again."
     );
 }
@@ -497,7 +516,10 @@ async fn an_override_on_a_schedule_the_roster_does_not_know_is_ended_and_named_b
             .deletes_overrides(SPARE_OVERRIDES, &["PSALICE"])
             .await;
 
-        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, reply);
+        assert_eq!(
+            answering.acknowledged(&in_sysadmin(ALICE, command)).await,
+            reply
+        );
         assert_eq!(
             requests_after_waking(&answering).await,
             [delete(SPARE_OVERRIDES, "PSALICE")]
@@ -525,7 +547,7 @@ async fn overrides_made_before_the_roster_knew_the_schedule_and_after_are_ended_
 
     assert_eq!(
         answering
-            .reply(&in_sysadmin(ALICE, "back to defaults"))
+            .acknowledged(&in_sysadmin(ALICE, "back to defaults"))
             .await,
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - `PI7DH85`: ended the override of Alice Example, Bob Example.\n\
@@ -544,10 +566,12 @@ async fn stop_ends_an_override_through_the_v2_path_and_a_custom_shift_through_th
         .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(204))
         .await;
 
-    let reply = answering.reply(&in_sysadmin(ALICE, "stop waking me")).await;
+    let otherwise = answering
+        .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+        .await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":zzz: Ended your override on **Fishnet rota**. The schedule decides again.\n\
          :zzz: Ended your shift on **Primary rota**. The schedule decides again."
     );
@@ -576,10 +600,12 @@ async fn reset_ends_an_override_through_the_v2_path_and_a_custom_shift_through_t
         .answers_a_delete(PRIMARY_SHIFTS, "PCALICE", ResponseTemplate::new(204))
         .await;
 
-    let reply = answering.reply(&in_sysadmin(BOB, "back to defaults")).await;
+    let otherwise = answering
+        .acknowledged(&in_sysadmin(BOB, "back to defaults"))
+        .await;
 
     assert_eq!(
-        reply,
+        otherwise,
         ":leftwards_arrow_with_hook: Back to the defaults.\n\
          - **Fishnet rota**: ended the override of Alice Example.\n\
          - **Primary rota**: ended the shift of Alice Example.\n\
@@ -621,7 +647,7 @@ async fn a_custom_shift_that_is_gone_or_has_already_ended_counts_as_ended() {
                 .await;
 
             assert_eq!(
-                answering.reply(&in_sysadmin(ALICE, command)).await,
+                answering.acknowledged(&in_sysadmin(ALICE, command)).await,
                 reply,
                 "{status}"
             );
@@ -667,7 +693,10 @@ async fn a_custom_shift_that_could_not_be_ended_stays_on_record_so_it_can_be_tri
             .await;
 
         assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, failed);
-        assert_eq!(answering.reply(&in_sysadmin(ALICE, command)).await, ended);
+        assert_eq!(
+            answering.acknowledged(&in_sysadmin(ALICE, command)).await,
+            ended
+        );
         assert_eq!(
             requests_after_waking(&answering).await,
             [
@@ -693,7 +722,9 @@ async fn an_override_whose_delete_is_answered_400_is_not_ended_and_stays_on_reco
         "I couldn't end your override on **Primary rota**: pagerduty rejected the request (400 Bad Request): Bad Request"
     );
     assert_eq!(
-        answering.reply(&in_sysadmin(ALICE, "stop waking me")).await,
+        answering
+            .acknowledged(&in_sysadmin(ALICE, "stop waking me"))
+            .await,
         ":zzz: Ended your override on **Primary rota**. The schedule decides again."
     );
 }

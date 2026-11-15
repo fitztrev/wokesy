@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::{Path, Request, State};
+use axum::http::StatusCode;
 use axum::http::header::USER_AGENT;
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -14,7 +15,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc, watch};
 use url::Url;
 
-use crate::chat::{ChannelName, ChatUserId, Conversation, TopicName};
+use crate::chat::{ChannelName, ChatUserId, Conversation, MessageId, TopicName};
 
 pub const BOT: u64 = 99;
 pub const ALICE: u64 = 12;
@@ -29,10 +30,18 @@ pub struct Posted {
     pub markdown: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reaction {
+    pub on: MessageId,
+    pub emoji_name: String,
+}
+
 #[derive(Clone)]
 struct Organization {
     user_agents: watch::Sender<Vec<String>>,
     posted: watch::Sender<Vec<Posted>>,
+    reactions: watch::Sender<Vec<Reaction>>,
+    refuses_reactions: watch::Sender<bool>,
     arriving: Arc<Mutex<mpsc::UnboundedReceiver<Value>>>,
     waiting_for_events: watch::Sender<usize>,
     channels_never_answered: watch::Sender<Vec<String>>,
@@ -73,6 +82,8 @@ impl FakeZulip {
         let organization = Organization {
             user_agents: watch::Sender::new(Vec::new()),
             posted: watch::Sender::new(Vec::new()),
+            reactions: watch::Sender::new(Vec::new()),
+            refuses_reactions: watch::Sender::new(false),
             arriving: Arc::new(Mutex::new(arriving)),
             waiting_for_events: watch::Sender::new(0),
             channels_never_answered: watch::Sender::new(Vec::new()),
@@ -84,6 +95,7 @@ impl FakeZulip {
             .route("/api/v1/register", post(register))
             .route("/api/v1/events", get(events))
             .route("/api/v1/messages", post(send_message))
+            .route("/api/v1/messages/{message}/reactions", post(add_reaction))
             .layer(middleware::from_fn_with_state(
                 organization.clone(),
                 note_the_user_agent,
@@ -128,13 +140,30 @@ impl FakeZulip {
         }
     }
 
-    pub fn mention(&self, sender: u64, channel: &str, topic: &str, text: &str) {
+    pub fn reactions(&self) -> Vec<Reaction> {
+        self.organization.reactions.borrow().clone()
+    }
+
+    pub async fn first_reaction(&self) -> Reaction {
+        let mut reactions = self.organization.reactions.subscribe();
+        let all = tokio::time::timeout(PATIENCE, reactions.wait_for(|all| !all.is_empty()))
+            .await
+            .unwrap()
+            .unwrap();
+        all[0].clone()
+    }
+
+    pub fn refuses_reactions(&self) {
+        self.organization.refuses_reactions.send_replace(true);
+    }
+
+    pub fn mention(&self, sender: u64, channel: &str, topic: &str, text: &str) -> MessageId {
         self.arrive(
             sender,
             &["mentioned"],
             &format!("@**Wokesy** {text}"),
             json!({ "type": "stream", "display_recipient": channel, "stream_id": 1, "subject": topic }),
-        );
+        )
     }
 
     pub fn direct_message(&self, sender: u64, text: &str) {
@@ -150,10 +179,11 @@ impl FakeZulip {
         );
     }
 
-    fn arrive(&self, sender: u64, flags: &[&str], content: &str, place: Value) {
+    fn arrive(&self, sender: u64, flags: &[&str], content: &str, place: Value) -> MessageId {
         let id = self.arrived.fetch_add(1, Ordering::Relaxed);
+        let message_id = 1000 + id.unsigned_abs();
         let mut message = json!({
-            "id": 1000 + id,
+            "id": message_id,
             "sender_id": sender,
             "sender_full_name": full_name_of(sender),
             "content": content,
@@ -164,6 +194,7 @@ impl FakeZulip {
         self.arrives
             .send(json!({ "id": id, "type": "message", "flags": flags, "message": message }))
             .unwrap();
+        MessageId(message_id)
     }
 
     pub fn never_answers_posts_in(&self, channel: &str) {
@@ -337,4 +368,23 @@ async fn send_message(
         id = posted.len();
     });
     success(json!({ "id": id }))
+}
+
+async fn add_reaction(
+    State(organization): State<Organization>,
+    Path(message): Path<u64>,
+    Form(reaction): Form<BTreeMap<String, String>>,
+) -> (StatusCode, Json<Value>) {
+    if *organization.refuses_reactions.borrow() {
+        let refusal =
+            json!({ "result": "error", "msg": "Invalid message(s)", "code": "BAD_REQUEST" });
+        return (StatusCode::BAD_REQUEST, Json(refusal));
+    }
+    organization.reactions.send_modify(|reactions| {
+        reactions.push(Reaction {
+            on: MessageId(message),
+            emoji_name: reaction["emoji_name"].clone(),
+        });
+    });
+    (StatusCode::OK, success(json!({})))
 }

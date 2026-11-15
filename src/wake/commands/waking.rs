@@ -7,7 +7,7 @@ use tokio::time::Instant;
 
 use super::backup::backup;
 use super::own_changes::{Kind, Made, OwnChange, WakeSchedule};
-use super::{Commands, FIRST_LINE, UNKNOWN_SENDER};
+use super::{Commands, FIRST_LINE, Reply, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, in_words, time_tag};
 use crate::on_call::{Level, Policy, Roster, name_in_chat, policy_in_chat};
 use crate::pagerduty::{self, ApiError, ScheduleId, ScheduleName, UserId};
@@ -47,21 +47,21 @@ impl Commands {
         lasting: Option<Duration>,
         roster: &Roster,
         directory: &Directory,
-    ) -> String {
+    ) -> Reply {
         let Some(user) = directory.pagerduty_user_of(sender) else {
-            return UNKNOWN_SENDER.to_owned();
+            return Reply::message(UNKNOWN_SENDER);
         };
         let Some(lasting) = lasting.filter(|lasting| !lasting.is_zero()) else {
-            return FOR_HOW_LONG.to_owned();
+            return Reply::message(FOR_HOW_LONG);
         };
         let allowed = (lasting <= self.config.longest)
             .then(|| Stint::starting_now(lasting))
             .flatten();
         let Some(stint) = allowed else {
-            return format!(
+            return Reply::message(format!(
                 "That is longer than I'm allowed to set ({}). Ask for less, or change the schedule in PagerDuty.",
                 format_duration(self.config.longest)
-            );
+            ));
         };
         self.forget_expired();
         let mut lines = Vec::new();
@@ -102,7 +102,7 @@ impl Commands {
             &made_on_some_schedule,
             roster,
         )
-        .unwrap_or_else(|| woken(stint.ends, &made_on_some_schedule, lines))
+        .unwrap_or_else(|| Reply::message(woken(stint.ends, &made_on_some_schedule, lines)))
     }
 }
 
@@ -113,7 +113,7 @@ fn now_on_call(
     schedules: &[ScheduleId],
     made: &[Kind],
     roster: &Roster,
-) -> Option<String> {
+) -> Option<Reply> {
     if made.len() != schedules.len() {
         return None;
     }
@@ -133,7 +133,8 @@ fn now_on_call(
     if !schedules.iter().all(on_the_first_line) {
         return None;
     }
-    let alongside = match others_on(first_line, user, schedules, made)? {
+    let others = others_on(first_line, user, schedules, made)?;
+    let alongside = match others {
         0 => String::new(),
         1 => format!(", together with 1 other at level {FIRST_LINE}"),
         others => format!(", together with {others} others at level {FIRST_LINE}"),
@@ -147,9 +148,14 @@ fn now_on_call(
         .levels
         .iter()
         .filter(|level| level.number > first_line.number);
-    Some(match backup(behind) {
+    let in_one_line = match backup(behind) {
         Some(backup) => format!("{on_call} {backup}"),
         None => on_call,
+    };
+    Some(if others == 0 {
+        Reply::acknowledgement(in_one_line)
+    } else {
+        Reply::message(in_one_line)
     })
 }
 

@@ -12,13 +12,13 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
 use super::*;
-use crate::chat::{ChannelName, ChatUserId, Conversation, TopicName};
+use crate::chat::{ChannelName, ChatUserId, Conversation, MessageId, TopicName};
 use crate::status;
 use fake_pagerduty::{
     ENQUEUE, FakePagerDuty, ON_CALL, PRIMARY_ROTA_OVERRIDES, PRIMARY_ROTA_SHIFT,
     PRIMARY_ROTA_SHIFTS,
 };
-use fake_zulip::{ALICE, BOB, FakeZulip, SAM};
+use fake_zulip::{ALICE, BOB, FakeZulip, Reaction, SAM};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const LONGER_THAN_A_TEST: Duration = Duration::from_hours(1);
@@ -28,6 +28,7 @@ const LONGEST_TELEMETRY_SHUTDOWN: Duration = Duration::from_secs(10);
 const ROUTING_KEY: &str = "samplekeyhere";
 const SYSADMIN: &str = "sysadmin";
 const STATUS: &str = "bot-status";
+const HELP_STARTS: &str = "I manage who is on call in PagerDuty.";
 
 struct Wokesy {
     pagerduty: FakePagerDuty,
@@ -222,18 +223,27 @@ async fn a_mention_asking_who_is_on_call_is_answered_in_its_topic() {
     assert_eq!(answer, on_call_now(&wokesy.pagerduty));
 }
 
+fn check_mark_on(message: MessageId) -> Reaction {
+    Reaction {
+        on: message,
+        emoji_name: "check".to_owned(),
+    }
+}
+
 #[tokio::test]
-async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_straight_away() {
+async fn wake_me_overrides_the_configured_schedule_gets_a_check_mark_and_the_change_is_announced() {
     let wokesy = Wokesy::settled().await;
     let mut announcements = wokesy.zulip.posts_in(on_call_topic());
     assert_eq!(announcements.next().await, on_call_now(&wokesy.pagerduty));
 
-    wokesy
+    let wake_me = wokesy
         .zulip
         .mention(ALICE, SYSADMIN, "incident", "wake me for 4 hours");
 
-    let answer = wokesy.zulip.posts_in(incident_topic()).next().await;
+    let acknowledged = wokesy.zulip.first_reaction().await;
     let announced = announcements.next().await;
+    wokesy.zulip.mention(ALICE, SYSADMIN, "incident", "help");
+    let first_in_the_topic = wokesy.zulip.posts_in(incident_topic()).next().await;
     let asked = wokesy.pagerduty.asked();
     let created = wokesy.pagerduty.changes_asked();
     let [created] = created.as_slice() else {
@@ -251,12 +261,12 @@ async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_s
         moment("end").unwrap() - moment("start").unwrap(),
         Duration::from_hours(4)
     );
-    assert_eq!(
-        answer,
-        format!(
-            ":alarm_clock: @_**|{ALICE}** is now on call for 4 hours. Level 2 (1 person) is backup."
-        )
+    assert_eq!(acknowledged, check_mark_on(wake_me));
+    assert!(
+        first_in_the_topic.starts_with(HELP_STARTS),
+        "{first_in_the_topic}"
     );
+    assert_eq!(wokesy.zulip.reactions(), [check_mark_on(wake_me)]);
     assert_eq!(
         announced,
         format!(
@@ -290,11 +300,13 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
         .mention(ALICE, SYSADMIN, "incident", "wake me for 4 hours");
     let woken = answers.next().await;
     let added = announcements.next().await;
-    wokesy
+    let stop_waking_me = wokesy
         .zulip
         .mention(ALICE, SYSADMIN, "incident", "stop waking me");
-    let stopped = answers.next().await;
+    let stopped = wokesy.zulip.first_reaction().await;
     let removed = announcements.next().await;
+    wokesy.zulip.mention(ALICE, SYSADMIN, "incident", "help");
+    let next_in_the_topic = answers.next().await;
 
     let changes = wokesy.pagerduty.changes_asked();
     let [refused, created, deleted] = changes.as_slice() else {
@@ -338,10 +350,12 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
 ```"
         )
     );
-    assert_eq!(
-        stopped,
-        ":zzz: Ended your shift on **Primary rota**. The schedule decides again."
+    assert_eq!(stopped, check_mark_on(stop_waking_me));
+    assert!(
+        next_in_the_topic.starts_with(HELP_STARTS),
+        "{next_in_the_topic}"
     );
+    assert_eq!(wokesy.zulip.reactions(), [check_mark_on(stop_waking_me)]);
     assert_eq!(
         removed,
         format!(
@@ -355,6 +369,34 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
 ```"
         )
     );
+}
+
+#[tokio::test]
+async fn when_zulip_refuses_the_check_mark_wake_me_is_answered_with_a_message_instead() {
+    let wokesy = Wokesy::settled().await;
+    let mut announcements = wokesy.zulip.posts_in(on_call_topic());
+    assert_eq!(announcements.next().await, on_call_now(&wokesy.pagerduty));
+    wokesy.zulip.refuses_reactions();
+
+    wokesy
+        .zulip
+        .mention(ALICE, SYSADMIN, "incident", "wake me for 4 hours");
+
+    let answer = wokesy.zulip.posts_in(incident_topic()).next().await;
+    let announced = announcements.next().await;
+    assert_eq!(
+        answer,
+        format!(
+            ":alarm_clock: @_**|{ALICE}** is now on call for 4 hours. Level 2 (1 person) is backup."
+        )
+    );
+    assert!(
+        announced.starts_with(&format!(
+            ":pager: **On call changed:** @_**|{ALICE}** for 4 hours"
+        )),
+        "{announced}"
+    );
+    assert_eq!(wokesy.zulip.reactions(), []);
 }
 
 #[tokio::test]

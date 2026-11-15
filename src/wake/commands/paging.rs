@@ -4,7 +4,7 @@ use humantime::{FormattedDuration, format_duration};
 use tokio::time::Instant;
 
 use super::{Answer, Commands};
-use crate::chat::{ChatUserId, IncomingMessage, OutgoingMessage};
+use crate::chat::{ChatUserId, IncomingMessage, OutgoingMessage, silenced};
 use crate::on_call::{Roster, on_call_now};
 use crate::pagerduty::{ApiError, Events, Summary, SummaryError};
 use crate::people::{Directory, Name};
@@ -105,7 +105,7 @@ fn paged(read: Option<&(Roster, Directory)>) -> String {
 }
 
 fn announcement(sender: ChatUserId, trouble: &Trouble) -> String {
-    let quoted: Vec<String> = trouble
+    let quoted: Vec<String> = silenced(trouble)
         .replace("\r\n", "\n")
         .split(LINE_ENDINGS)
         .map(|line| format!("> {line}"))

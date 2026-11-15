@@ -88,25 +88,53 @@ async fn a_page_is_announced_with_what_is_wrong_only_inside_a_quote() {
 }
 
 #[tokio::test]
-async fn every_line_of_what_is_wrong_is_quoted_so_that_it_cannot_ping_anyone() {
+async fn every_line_of_what_is_wrong_is_quoted_and_every_mention_in_it_is_silent() {
     let mut answering = paging().await;
-    let text = "page the database is down @**all**\r\n\r\n@**Carol Example** please look\n```\nFATAL: no space left\rPANIC\n\n@**all**";
+    let text = "page the database is down @**all**\r\n\r\n@**Carol Example** please look\n```\nFATAL: no space left\rPANIC\n\n@*sysadmins*";
 
     let answer = answering.answer(&in_sysadmin(ALICE, text)).await;
 
     assert_eq!(
         answer.announcement.unwrap().markdown(),
         ":rotating_light: @_**|12** paged on call:\n\
-         > the database is down @**all**\n\
+         > the database is down @_**all**\n\
          > \n\
-         > @**Carol Example** please look\n\
+         > @_**Carol Example** please look\n\
          > ```\n\
          > FATAL: no space left\n\
          > PANIC\n\
          > \n\
-         > @**all**"
+         > @_*sysadmins*"
     );
     assert_eq!(answer.reply.markdown(), PAGED_AND_ON_CALL_NOW);
+}
+
+#[tokio::test]
+async fn a_mention_zulip_would_not_silence_inside_the_quote_cannot_notify_either() {
+    for mention in ["@**Carol Example**", "@*sysadmins*", "@**all**"] {
+        let mut answering = paging().await;
+        let text = format!("page >{mention} db is down\n> >{mention}\n>>{mention}");
+
+        let answer = answering.answer(&in_sysadmin(ALICE, &text)).await;
+
+        let silent = mention.replacen('@', "@_", 1);
+        assert_eq!(
+            answer.announcement.unwrap().markdown(),
+            format!(
+                ":rotating_light: @_**|12** paged on call:\n\
+                 > >{silent} db is down\n\
+                 > > >{silent}\n\
+                 > >>{silent}"
+            ),
+            "{mention}"
+        );
+        assert_eq!(
+            summaries(&answering).await,
+            [format!(
+                "Alice Example: >{mention} db is down\n> >{mention}\n>>{mention}"
+            )]
+        );
+    }
 }
 
 #[tokio::test]

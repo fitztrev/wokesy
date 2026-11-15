@@ -2,6 +2,9 @@ use time::{OffsetDateTime, UtcOffset};
 
 use super::conversation::ChatUserId;
 
+const MENTION: &str = "@*";
+const SILENT_MENTION: &str = "@_*";
+
 impl ChatUserId {
     /// ```
     /// use wokesy::chat::ChatUserId;
@@ -12,6 +15,20 @@ impl ChatUserId {
     pub fn silent_mention(self) -> String {
         format!("@_**|{}**", self.0)
     }
+}
+
+/// ```
+/// use wokesy::chat::silenced;
+///
+/// assert_eq!(silenced("ask @**Carol Example**"), "ask @_**Carol Example**");
+/// assert_eq!(silenced(">@**all** and @*sysadmins*"), ">@_**all** and @_*sysadmins*");
+/// assert_eq!(silenced("@_**Carol Example|17** @_*sysadmins*"), "@_**Carol Example|17** @_*sysadmins*");
+/// assert_eq!(silenced("@@**all**"), "@@_**all**");
+/// assert_eq!(silenced("alice@example.com *is* down"), "alice@example.com *is* down");
+/// ```
+#[must_use]
+pub fn silenced(text: &str) -> String {
+    text.replace(MENTION, SILENT_MENTION)
 }
 
 /// ```

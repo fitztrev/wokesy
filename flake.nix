@@ -57,7 +57,7 @@
               "WOKESY_HTTP__PORT=${toString httpPort}"
             ];
             Labels = {
-              "org.opencontainers.image.source" = "https://github.com/lichess-org/wokesy";
+              "org.opencontainers.image.source" = "https://github.com/lakinwecker/wokesy";
               "org.opencontainers.image.version" = version;
             };
           };
@@ -78,7 +78,7 @@
           inherit wokesy container;
           default = container;
           release = pkgs.mkReleaseCommand {
-            repositoryUrl = "https://github.com/lichess-org/wokesy";
+            repositoryUrl = "https://github.com/lakinwecker/wokesy";
             hooks = ./ci/release-hooks.sh;
             releaseWorkflow = "release.yml";
           };

@@ -315,7 +315,7 @@ async fn every_request_to_pagerduty_and_zulip_says_it_comes_from_wokesy() {
         concat!(
             "wokesy/",
             env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/lichess-org/wokesy)"
+            " (+https://github.com/lakinwecker/wokesy)"
         )
     );
 }

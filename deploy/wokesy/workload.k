@@ -2,7 +2,7 @@ import regex
 import k8s.api.apps.v1 as apps
 import k8s.api.core.v1 as core
 
-IMAGE_REPOSITORY = "ghcr.io/lichess-org/wokesy"
+IMAGE_REPOSITORY = "ghcr.io/lakinwecker/wokesy"
 HTTP_PORT_NAME = "http"
 HTTP_PORT = 8080
 UNPRIVILEGED_ID = 65534

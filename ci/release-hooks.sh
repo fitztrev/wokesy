@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly published_image=ghcr.io/lichess-org/wokesy
+readonly published_image=ghcr.io/lakinwecker/wokesy
 readonly pin_pattern='^(\s*image_version = ")([^"]*)(")$'
 readonly prod_manifest=deploy/prod/main.k
 

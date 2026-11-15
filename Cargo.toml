@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
-repository = "https://github.com/lichess-org/wokesy"
+repository = "https://github.com/lakinwecker/wokesy"
 
 [package]
 name = "wokesy"

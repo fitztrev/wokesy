@@ -43,10 +43,10 @@
       exit 2
     fi
     version=''${1#v}
-    gh workflow run deploy.yml --repo lichess-org/wokesy -f version="$version"
+    gh workflow run deploy.yml --repo lakinwecker/wokesy -f version="$version"
     echo "Requested a production deploy of $version. Follow it with:"
-    echo "  gh run list --repo lichess-org/wokesy --workflow deploy.yml"
-    echo "  gh run watch --repo lichess-org/wokesy"
+    echo "  gh run list --repo lakinwecker/wokesy --workflow deploy.yml"
+    echo "  gh run watch --repo lakinwecker/wokesy"
   '';
 
   enterTest = ''

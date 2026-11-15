@@ -160,7 +160,7 @@ async fn startup_posts_the_version_and_changelog_to_the_instance_topic_in_the_co
                 topic,
             },
             OutgoingMessage::new(format!(
-                ":rocket: wokesy v{version} started — [changelog](https://github.com/lichess-org/wokesy/releases/tag/v{version})"
+                ":rocket: wokesy v{version} started — [changelog](https://github.com/lakinwecker/wokesy/releases/tag/v{version})"
             )),
         )]
     );

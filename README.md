@@ -196,7 +196,7 @@ The tests need no PagerDuty account and no Zulip organization. They run wokesy a
 
 ## Deploy it
 
-Wokesy runs as one container in Kubernetes. The image is `ghcr.io/lichess-org/wokesy:<version>`. It listens on port 8080 and answers `/livez` and `/readyz`. `/livez` answers 200 while wokesy runs. `/readyz` answers 200 only while wokesy can use PagerDuty, and 503 until its first check of PagerDuty is done.
+Wokesy runs as one container in Kubernetes. The image is `ghcr.io/lakinwecker/wokesy:<version>`. It listens on port 8080 and answers `/livez` and `/readyz`. `/livez` answers 200 while wokesy runs. `/readyz` answers 200 only while wokesy can use PagerDuty, and 503 until its first check of PagerDuty is done.
 
 Wokesy keeps running while PagerDuty or Zulip cannot be reached: it logs the failure and tries again. If one of its own tasks stops, the process exits with an error, and Kubernetes starts it again. On `SIGTERM` or `SIGINT` it stops reading messages, finishes the command it is working on for at most 10 seconds, posts that it is shutting down, and exits. It waits at most 5 seconds for Zulip to take that post, at most 2 seconds for the probe connections to close, and at most 10 seconds to send its last telemetry. So a shutdown takes at most 27 seconds, inside the 30 seconds that the Deployment gives it.
 

@@ -18,7 +18,7 @@ Wokesy is a Zulip bot that manages who is on call, written in Rust. PagerDuty is
 - **Nothing about a particular account is built in.** Wokesy works with any PagerDuty account and Zulip organization. Never hard-code or default escalation policy names, schedule ids, channel names, or people.
 - **All configuration comes from environment variables.** Application settings live under `WOKESY_`, with `__` separating nesting levels (for example `WOKESY_PAGERDUTY__TOKEN`). Every config struct has `#[serde(deny_unknown_fields)]`. OpenTelemetry uses the standard `OTEL_*` variables. Secrets are declared in `secretspec.toml` and injected only into the process that needs them with `secretspec run`. devenv's secretspec integration stays off in `devenv.yaml`, so secrets never enter the shell. Never put secrets in `.env` files or commit them.
 - **The links between people, the channel names, and all Zulip settings are secrets.** They reach production through the Kubernetes Secret, never through plain manifest values.
-- **Requests to PagerDuty and Zulip go through `app::http_client()`**, so every one carries our User-Agent, `wokesy/<version> (+https://github.com/lichess-org/wokesy)`.
+- **Requests to PagerDuty and Zulip go through `app::http_client()`**, so every one carries our User-Agent, `wokesy/<version> (+https://github.com/lakinwecker/wokesy)`.
 - **Telemetry uses `tracing`.** It is exported through OpenTelemetry (OTLP) when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Log as structured fields, not interpolated strings.
 - **Log ids, never people or what they wrote.** Log a person as a PagerDuty user id or a chat user id. Never log a name, an email address, or the text of a message or of an event. A test that checks what is logged listens with `crate::testing::Logs`.
 - **Strict linting.** Clippy runs with `pedantic`, `nursery`, and restriction lints (no `unwrap`, `expect`, `panic`, or indexing outside tests), all with `-D warnings`. Never silence a lint broadly. If a lint must be suppressed, use a narrowly scoped `#[expect(...)]`.
@@ -109,7 +109,7 @@ Before handing work back, these must be clean: `cargo fmt --check`, `cargo clipp
 
 - Commit subjects on `main` are conventional commits. `feat` asks for a minor bump, other types ask for a patch, and `!` or `BREAKING CHANGE:` asks for a major. Releases read the version from them.
 - `release` runs the shared `dull-nix` release command. It sets `[workspace.package]` version, renders `CHANGELOG.md`, tags `v*`, and pushes. Never edit the version or the changelog by hand.
-- The `Release` workflow publishes `ghcr.io/lichess-org/wokesy:<version>` (plus `latest` for stable releases) and creates the GitHub release. For stable releases, `Deploy` then pins `deploy/prod/main.k` to the new version.
+- The `Release` workflow publishes `ghcr.io/lakinwecker/wokesy:<version>` (plus `latest` for stable releases) and creates the GitHub release. For stable releases, `Deploy` then pins `deploy/prod/main.k` to the new version.
 - `deploy <version>` re-pins production to a version that is already published.
 - `ci/nixpkgs-pin.sh` requires `flake.lock` and `devenv.lock` to agree on nixpkgs and rust-overlay, so dev, CI, and the container share a toolchain. Update both together. A git hook runs it when either lock file is committed.
 - Wokesy runs as exactly one replica, with the `Recreate` strategy. Two replicas would both announce and both answer.

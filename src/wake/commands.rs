@@ -24,7 +24,7 @@ I manage who is on call in PagerDuty.
 - `page lichess.org is down` alerts whoever is on call, through PagerDuty. Anyone here can use it. After a page I wait a while before I page again.
 - `wake me for 4 hours` puts you first in line on every escalation policy for that long. PagerDuty hands it back when the time is up.
 - `stop waking me` ends that early.
-- `back to defaults` ends every override in effect, yours or anyone's, so the schedules decide again.
+- `back to defaults` ends every override I made, for you or anyone else, so PagerDuty's own schedules decide again.
 - `who is on call` shows who is on call now.";
 const BETWEEN_OPEN_CHANNELS: &str = " or ";
 

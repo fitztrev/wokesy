@@ -35,6 +35,59 @@ fn wake_me_takes_its_duration_from_an_amount_and_a_unit() {
 }
 
 #[test]
+fn woke_me_takes_its_duration_as_wake_me_does() {
+    for (text, lasting) in [
+        ("woke me for 4 hours", 4 * HOUR),
+        ("woke me for 4h", 4 * HOUR),
+        ("woke me for 90 minutes", 90 * MINUTE),
+        ("woke me for 1h30m", 90 * MINUTE),
+        ("woke me for 1 hour 30 minutes", 90 * MINUTE),
+        ("woke me for an hour", HOUR),
+        ("woke me for a day", DAY),
+        ("woke me for anything in the next 4 hours", 4 * HOUR),
+        ("woke me 2 days", 2 * DAY),
+        ("woke me 30m", 30 * MINUTE),
+        (
+            "woke me for 1 day, 2 hours and 3 minutes",
+            DAY + 2 * HOUR + 3 * MINUTE,
+        ),
+        ("woke me for 1d2h3m", DAY + 2 * HOUR + 3 * MINUTE),
+        ("woke me for 0 hours", Duration::ZERO),
+        ("woke me for 2h by default", 2 * HOUR),
+    ] {
+        assert_eq!(parse(text), wake(lasting), "{text}");
+    }
+}
+
+#[test]
+fn woke_me_without_an_amount_and_a_unit_has_no_duration() {
+    for text in [
+        "woke me",
+        "woke me for anything",
+        "woke me for 4",
+        "woke me for hours",
+        "woke me at 3 pm",
+        "woke me for 1.5 hours",
+        "woke me for `4h`",
+    ] {
+        assert_eq!(parse(text), Command::Wake(None), "{text}");
+    }
+}
+
+#[test]
+fn woke_me_matches_whatever_its_case_spacing_and_punctuation() {
+    for (text, lasting) in [
+        ("Woke me for an hour.", HOUR),
+        ("  Woke  Me for 4 Hours. ", 4 * HOUR),
+        ("WOKE ME FOR 4H!", 4 * HOUR),
+        ("woke me\nfor 4 hours", 4 * HOUR),
+        ("woke me, for 4h", 4 * HOUR),
+    ] {
+        assert_eq!(parse(text), wake(lasting), "{text}");
+    }
+}
+
+#[test]
 fn every_spelling_of_a_unit_is_understood() {
     for (units, one) in [
         (["m", "min", "mins", "minute", "minutes"].as_slice(), MINUTE),
@@ -157,6 +210,9 @@ fn a_first_word_in_backticks_or_quotes_is_talk_about_a_command() {
         "\"page\" alerts whoever is on call",
         "'stop' ends it early",
         "“wake me for 4 hours” is what I typed",
+        "`woke me`",
+        "`woke me for 4 hours`",
+        "\"woke me\" works too",
         "‘who’ shows the roster",
         "«reset»",
         "(`page`) db is down",
@@ -175,6 +231,7 @@ fn a_command_word_right_after_a_backtick_or_a_quote_is_not_the_command() {
         "what does \"default\" mean",
         "is ‘defaults’ a command",
         "wake `me` for 4h",
+        "woke `me` for 4h",
         "on `call`",
     ] {
         assert_eq!(parse(text), Command::Unrecognized, "{text}");
@@ -241,6 +298,8 @@ fn anything_else_is_unrecognized() {
         "help me",
         "wake up",
         "wake",
+        "woke up",
+        "woke",
         "back tomorrow",
         "resetting",
         "on call tonight",

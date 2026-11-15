@@ -35,7 +35,7 @@ The mention must be the first thing in the message. Wokesy ignores a message tha
 
   `page` works even while wokesy cannot read the rest of PagerDuty. If paging is not set up, or PagerDuty refuses the alert, wokesy says so and tells the sender to use PagerDuty directly.
 
-- **`wake me for 4 hours`** puts the sender on call for that long, from now until the time is up, on each schedule named in `WOKESY_WAKE__SCHEDULES`. It touches no other schedule. If that setting is empty, `wake me` is off, and wokesy answers `Waking is not set up here. Change the schedule in PagerDuty directly.`
+- **`wake me for 4 hours`** puts the sender on call for that long, from now until the time is up, on each schedule named in `WOKESY_WAKE__SCHEDULES`. It touches no other schedule. `woke me` works the same way. If that setting is empty, `wake me` is off, and wokesy answers `Waking is not set up here. Change the schedule in PagerDuty directly.`
 
   Wokesy works with both kinds of PagerDuty schedule. On a legacy schedule, which is built from layers, it creates a schedule override, and the sender replaces whoever was scheduled. On a shift-based schedule it creates a custom shift, and the sender is on call alongside whoever is scheduled. PagerDuty no longer lets new legacy schedules be created, so every new schedule is shift-based. Wokesy tries the override first. PagerDuty refuses it on a shift-based schedule, and wokesy then creates the custom shift and remembers the kind of that schedule until it restarts. In both cases PagerDuty ends it by itself when the time is up, even if wokesy is not running then, and `stop waking me` ends it early. The on-call topic then shows the change.
 

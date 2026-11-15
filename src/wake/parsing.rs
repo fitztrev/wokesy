@@ -30,7 +30,8 @@ enum Piece {
 const CLOSING_PUNCTUATION: [char; 3] = ['.', '!', '?'];
 const QUOTING: [char; 10] = ['`', '"', '\'', '“', '”', '„', '‘', '’', '«', '»'];
 const PAGE: &str = "page";
-const WAKE: [&str; 2] = ["wake", "me"];
+const WAKE: [&str; 2] = ["wake", "woke"];
+const ME: &str = "me";
 const STOP: &str = "stop";
 const RESET: &str = "reset";
 const BACK_TO: [&str; 2] = ["back", "to"];
@@ -58,7 +59,7 @@ pub fn parse(text: &str) -> Command {
     match words.as_slice() {
         [first, ..] if first.starts_with(QUOTING) => Command::Unrecognized,
         [first, ..] if *first == PAGE => Command::Page(trouble(text)),
-        [wake, me, rest @ ..] if [*wake, *me] == WAKE => Command::Wake(duration(rest)),
+        [wake, me, rest @ ..] if WAKE.contains(wake) && *me == ME => Command::Wake(duration(rest)),
         [first, ..] if *first == STOP => Command::Stop,
         [first, ..] if *first == RESET => Command::Reset,
         [back, to, ..] if [*back, *to] == BACK_TO => Command::Reset,

@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use super::own_overrides::OwnOverride;
 use super::{Commands, UNKNOWN_SENDER};
 use crate::chat::{ChatUserId, time_tag};
-use crate::on_call::{Policy, Roster};
+use crate::on_call::{Policy, Roster, name_in_chat, policy_in_chat, schedule_in_chat};
 use crate::pagerduty::{ScheduleId, ScheduleRef, UserRef};
 use crate::people::Directory;
 
@@ -128,22 +128,22 @@ fn line(policy: &Policy, refusals: &Refusals) -> String {
     } else {
         outcome(schedules, people, refusals)
     };
-    format!("- **{}**: {outcome}", policy.name)
+    format!("- {}: {outcome}", policy_in_chat(&policy.name))
 }
 
 fn outcome(schedules: &[ScheduleRef], people: &[UserRef], refusals: &Refusals) -> String {
     let overridden: Vec<String> = schedules
         .iter()
         .filter(|schedule| !refusals.contains_key(&schedule.id))
-        .map(|schedule| format!("**{}**", schedule.name))
+        .map(|schedule| schedule_in_chat(&schedule.name))
         .collect();
     let refused: Vec<String> = schedules
         .iter()
         .filter_map(|schedule| {
             let error = refusals.get(&schedule.id)?;
             Some(format!(
-                "I couldn't override **{}**: {error}",
-                schedule.name
+                "I couldn't override {}: {error}",
+                schedule_in_chat(&schedule.name)
             ))
         })
         .collect();
@@ -154,7 +154,10 @@ fn outcome(schedules: &[ScheduleRef], people: &[UserRef], refusals: &Refusals) -
             overridden.join(BETWEEN_NAMES)
         ));
         if !people.is_empty() {
-            let names: Vec<&str> = people.iter().map(|person| person.name.as_str()).collect();
+            let names: Vec<String> = people
+                .iter()
+                .map(|person| name_in_chat(&person.name))
+                .collect();
             sentences.push(format!(
                 "Level 1 also pages {} directly.",
                 names.join(BETWEEN_NAMES)

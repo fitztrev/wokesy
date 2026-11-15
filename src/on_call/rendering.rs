@@ -1,8 +1,8 @@
 use super::changes::Change;
 use super::roster::{Roster, Shift};
-use crate::chat::{ChatUserId, time_tag};
-use crate::pagerduty::{EscalationLevel, EscalationPolicyName, UserRef};
-use crate::people::Directory;
+use crate::chat::{ChatUserId, silenced, time_tag};
+use crate::pagerduty::{EscalationLevel, EscalationPolicyName, ScheduleName, UserRef};
+use crate::people::{Directory, Name};
 
 const ON_CALL_NOW: &str = ":pager: **On call now**";
 const ON_CALL_CHANGED: &str = ":pager: **On call changed**";
@@ -10,6 +10,52 @@ const NO_POLICY_IN_USE: &str = "No escalation policy is used by a service, so no
 const NOBODY_ON_CALL: &str = ":warning: nobody";
 const NOBODY: &str = "nobody";
 const BETWEEN_PEOPLE: &str = ", ";
+
+/// ```
+/// use wokesy::on_call::policy_in_chat;
+/// use wokesy::pagerduty::EscalationPolicyName;
+///
+/// let name = |name: &str| EscalationPolicyName::try_new(name).unwrap();
+///
+/// assert_eq!(policy_in_chat(&name("Lichess")), "**Lichess**");
+/// assert_eq!(policy_in_chat(&name("Ops @**all**")), "**Ops @_**all****");
+/// ```
+#[must_use]
+pub fn policy_in_chat(name: &EscalationPolicyName) -> String {
+    bold(name)
+}
+
+/// ```
+/// use wokesy::on_call::schedule_in_chat;
+/// use wokesy::pagerduty::ScheduleName;
+///
+/// let name = |name: &str| ScheduleName::try_new(name).unwrap();
+///
+/// assert_eq!(schedule_in_chat(&name("Primary rota")), "**Primary rota**");
+/// assert_eq!(schedule_in_chat(&name("Rota of @*sysadmins*")), "**Rota of @_*sysadmins***");
+/// ```
+#[must_use]
+pub fn schedule_in_chat(name: &ScheduleName) -> String {
+    bold(name)
+}
+
+/// ```
+/// use wokesy::on_call::name_in_chat;
+/// use wokesy::people::Name;
+///
+/// let name = |name: &str| Name::try_new(name).unwrap();
+///
+/// assert_eq!(name_in_chat(&name("Carol Example")), "Carol Example");
+/// assert_eq!(name_in_chat(&name("@**all**")), "@_**all**");
+/// ```
+#[must_use]
+pub fn name_in_chat(name: &Name) -> String {
+    silenced(name)
+}
+
+fn bold(name: &str) -> String {
+    format!("**{}**", silenced(name))
+}
 
 /// ```
 /// use wokesy::on_call::{Roster, on_call_now};
@@ -57,7 +103,7 @@ fn under(heading: &str, lines: impl IntoIterator<Item = String>) -> String {
 }
 
 fn line(policy: &EscalationPolicyName, level: EscalationLevel, on_call: &str) -> String {
-    format!("- **{policy}**, level {level}: {on_call}")
+    format!("- {}, level {level}: {on_call}", policy_in_chat(policy))
 }
 
 fn on_call(shifts: &[Shift], directory: &Directory) -> String {
@@ -87,7 +133,7 @@ fn listed(people: impl Iterator<Item = String>) -> String {
 fn person(user: &UserRef, directory: &Directory) -> String {
     directory
         .chat_user_of(&user.id)
-        .map_or_else(|| user.name.to_string(), ChatUserId::silent_mention)
+        .map_or_else(|| name_in_chat(&user.name), ChatUserId::silent_mention)
 }
 
 #[cfg(test)]

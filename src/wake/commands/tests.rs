@@ -1,6 +1,8 @@
 use super::*;
+use crate::on_call::Roster;
 use crate::wake::testing::{
-    ALICE, Answering, BOB, ON_CALL_NOW, STRANGER, Setup, channel, direct, in_sysadmin, mention_in,
+    ALICE, Answering, BOB, ON_CALL_NOW, PRIMARY_OVERRIDES, STRANGER, Setup, channel, direct,
+    directory, in_sysadmin, level, mention_in, policy, schedule, user,
 };
 
 const EVERY_COMMAND: [&str; 7] = [
@@ -207,4 +209,54 @@ async fn a_command_is_answered_from_the_roster_and_the_directory_as_they_are_whe
         answering.reply(&in_sysadmin(ALICE, "who")).await,
         ON_CALL_NOW
     );
+}
+
+#[tokio::test]
+async fn no_reply_repeats_a_name_from_pagerduty_as_a_mention_that_notifies() {
+    let rota = schedule("PI7DH85", "@*sysadmins*");
+    let roster = Roster {
+        policies: vec![policy(
+            "PLICHES",
+            "x @**all**",
+            &[level(1, &[rota], &[user("PCAROL1", "@**Carol Example**")])],
+        )],
+    };
+    let setup = Setup {
+        directory: Some(directory(&[("PALICE1", "@**everyone**", Some(ALICE))])),
+        ..Setup::with_roster(roster)
+    };
+    let mut answering = setup.start().await;
+    answering.accepts_pages().await;
+    answering
+        .creates_overrides(PRIMARY_OVERRIDES, &["PQ00001", "PQ00002", "PQ00003"])
+        .await;
+    answering
+        .deletes_overrides(PRIMARY_OVERRIDES, &["PQ00001"])
+        .await;
+    answering.refuses_overrides(PRIMARY_OVERRIDES).await;
+
+    let mut replies = Vec::new();
+    for command in [
+        "who is on call",
+        "page lichess.org is down",
+        "wake me for 4 hours",
+        "stop waking me",
+        "wake me for 4 hours",
+        "wake me for 4 hours",
+        "back to defaults",
+        "wake me for 4 hours",
+    ] {
+        replies.push(answering.reply(&in_sysadmin(ALICE, command)).await);
+    }
+
+    let said = replies.join("\n");
+    for silent in [
+        "**x @_**all****",
+        "**@_*sysadmins***",
+        "@_**Carol Example**",
+        "@_**everyone**",
+    ] {
+        assert!(said.contains(silent), "{silent} is missing from {said}");
+    }
+    assert!(!said.contains("@*"), "{said}");
 }

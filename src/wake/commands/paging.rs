@@ -79,7 +79,7 @@ impl Commands {
 }
 
 async fn alert(events: &Events, sender: &Name, trouble: &Trouble) -> Result<(), PageError> {
-    let summary: String = format!("{sender}: {trouble}")
+    let summary: String = format!("{}: {trouble}", sender.as_str())
         .chars()
         .take(LONGEST_SUMMARY)
         .collect();

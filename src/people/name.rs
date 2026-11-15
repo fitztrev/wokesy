@@ -9,17 +9,6 @@ use nutype::nutype;
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Deref,
-        Display,
-        Deserialize
-    )
+    derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deref, Deserialize)
 )]
 pub struct Name(String);

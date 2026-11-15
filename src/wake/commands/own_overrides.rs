@@ -2,7 +2,8 @@ use reqwest::StatusCode;
 use tokio::time::Instant;
 
 use super::{Commands, UNKNOWN_SENDER};
-use crate::chat::ChatUserId;
+use crate::chat::{ChatUserId, silenced};
+use crate::on_call::{name_in_chat, schedule_in_chat};
 use crate::pagerduty::{ApiError, OverrideId, ScheduleRef, UserId};
 use crate::people::Directory;
 
@@ -108,7 +109,7 @@ fn stopped(endings: &[Ending]) -> String {
         endings
             .iter()
             .filter(|ending| ending.failure.is_none())
-            .map(|ending| format!("**{}**", ending.schedule.name)),
+            .map(|ending| schedule_in_chat(&ending.schedule.name)),
     );
     let ended = (!ended.is_empty()).then(|| {
         format!(
@@ -119,8 +120,8 @@ fn stopped(endings: &[Ending]) -> String {
     let failed = distinct(endings.iter().filter_map(|ending| {
         let error = ending.failure.as_ref()?;
         Some(format!(
-            "I couldn't end your override on **{}**: {error}",
-            ending.schedule.name
+            "I couldn't end your override on {}: {error}",
+            schedule_in_chat(&ending.schedule.name)
         ))
     }));
     ended
@@ -138,8 +139,8 @@ fn back_to_the_defaults(endings: &[Ending], directory: &Directory) -> String {
             .filter(|ending| ending.schedule.id == schedule.id)
             .collect();
         format!(
-            "- **{}**: {}",
-            schedule.name,
+            "- {}: {}",
+            schedule_in_chat(&schedule.name),
             outcome(&on_schedule, directory)
         )
     });
@@ -154,7 +155,7 @@ fn outcome(on_schedule: &[&Ending], directory: &Directory) -> String {
     let name = |user: &UserId| {
         directory
             .name_of(user)
-            .map_or_else(|| user.to_string(), ToString::to_string)
+            .map_or_else(|| silenced(user), name_in_chat)
     };
     let ended = distinct(
         on_schedule

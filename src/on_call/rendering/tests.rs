@@ -106,6 +106,36 @@ fn nobody_is_named_with_a_mention_that_notifies_them() {
 }
 
 #[test]
+fn a_name_from_pagerduty_that_holds_a_mention_cannot_notify() {
+    let everyone = user("PEVERY1", "@**all**");
+    let group = user("PGROUP1", "x @*sysadmins*");
+    let named_to_ping = |shifts: &[Shift]| {
+        roster(&[policy(
+            "PLICHES",
+            "Ops @**Carol Example**",
+            &[level(1, shifts)],
+        )])
+    };
+    let on_call = named_to_ping(&[open_ended(everyone), open_ended(group)]);
+
+    let now = on_call_now(&on_call, &alice_and_bob_in_chat());
+    let change = changed(&on_call, &named_to_ping(&[]));
+
+    assert_eq!(
+        now,
+        "\
+:pager: **On call now**
+- **Ops @_**Carol Example****, level 1: @_**all**, x @_*sysadmins*"
+    );
+    assert_eq!(
+        change,
+        "\
+:pager: **On call changed**
+- **Ops @_**Carol Example****, level 1: :warning: nobody (was @_**all**, x @_*sysadmins*)"
+    );
+}
+
+#[test]
 fn a_change_names_who_is_on_call_at_the_level_and_who_was() {
     let announced = lichess(&[until_the_evening(bob())]);
     let latest = lichess(&[until_the_evening(alice())]);

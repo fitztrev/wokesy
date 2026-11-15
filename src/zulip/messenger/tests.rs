@@ -9,6 +9,9 @@ use super::*;
 use crate::chat::{ChannelName, ChatUserId, TopicName};
 use crate::zulip::{ApiError, BotEmail, InboxConfig};
 
+const MESSAGES: &str = "/api/v1/messages";
+const REACTIONS_TO_MESSAGE_42: &str = "/api/v1/messages/42/reactions";
+
 struct FakeZulip {
     server: MockServer,
     messenger: ZulipMessenger,
@@ -16,9 +19,13 @@ struct FakeZulip {
 
 impl FakeZulip {
     async fn replying(reply: Value) -> Self {
+        Self::replying_at(MESSAGES, reply).await
+    }
+
+    async fn replying_at(asked: &str, reply: Value) -> Self {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/messages"))
+            .and(path(asked))
             .respond_with(ResponseTemplate::new(200).set_body_json(&reply))
             .mount(&server)
             .await;
@@ -130,5 +137,44 @@ async fn a_non_success_result_from_zulip_is_a_failed_delivery_carrying_its_error
     assert!(matches!(
         rejection,
         Some(ApiError::Rejected { reason, .. }) if reason == "Channel 'sysadmin' does not exist"
+    ));
+}
+
+#[tokio::test]
+async fn a_message_is_acknowledged_by_adding_the_check_reaction_to_it() {
+    let zulip = FakeZulip::replying_at(
+        REACTIONS_TO_MESSAGE_42,
+        json!({ "result": "success", "msg": "" }),
+    )
+    .await;
+
+    zulip.messenger.acknowledge(MessageId(42)).await.unwrap();
+
+    assert_eq!(zulip.only_form().await, form(&[("emoji_name", "check")]));
+}
+
+#[tokio::test]
+async fn a_reaction_zulip_refuses_is_a_failed_acknowledgement_carrying_its_error_message() {
+    let zulip = FakeZulip::replying_at(
+        REACTIONS_TO_MESSAGE_42,
+        json!({
+            "result": "error",
+            "msg": "Reaction already exists.",
+            "code": "REACTION_ALREADY_EXISTS",
+        }),
+    )
+    .await;
+
+    let error = zulip
+        .messenger
+        .acknowledge(MessageId(42))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.message, MessageId(42));
+    let rejection = error.cause.downcast_ref::<ApiError>();
+    assert!(matches!(
+        rejection,
+        Some(ApiError::Rejected { reason, .. }) if reason == "Reaction already exists."
     ));
 }

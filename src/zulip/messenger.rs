@@ -1,4 +1,7 @@
-use crate::chat::{Conversation, DeliveryError, Messenger, OutgoingMessage};
+use crate::chat::{
+    AcknowledgementError, Acknowledger, Conversation, DeliveryError, MessageId, Messenger,
+    OutgoingMessage,
+};
 
 use super::Config;
 use super::api::Api;
@@ -28,6 +31,18 @@ impl Messenger for ZulipMessenger {
             .await
             .map_err(|error| DeliveryError {
                 conversation: conversation.clone(),
+                cause: Box::new(error),
+            })
+    }
+}
+
+impl Acknowledger for ZulipMessenger {
+    async fn acknowledge(&self, message: MessageId) -> Result<(), AcknowledgementError> {
+        self.api
+            .add_check_mark(message)
+            .await
+            .map_err(|error| AcknowledgementError {
+                message,
                 cause: Box::new(error),
             })
     }

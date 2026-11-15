@@ -14,6 +14,7 @@ use super::{BotEmail, Config};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const LONG_POLL_TIMEOUT: Duration = Duration::from_secs(90);
+const CHECK_MARK: &str = "check";
 
 #[derive(Clone, Debug)]
 pub struct Api {
@@ -266,6 +267,15 @@ impl Api {
                 ("content", message.markdown()),
             ]),
         };
+        read::<IgnoredAny>(request.send().await?).await?;
+        Ok(())
+    }
+
+    pub async fn add_check_mark(&self, message: MessageId) -> Result<(), ApiError> {
+        let reactions = format!("messages/{}/reactions", message.0);
+        let request = self
+            .request(Method::POST, &reactions)
+            .form(&[("emoji_name", CHECK_MARK)]);
         read::<IgnoredAny>(request.send().await?).await?;
         Ok(())
     }

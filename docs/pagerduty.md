@@ -27,10 +27,11 @@ While the level 1 schedule is empty, nothing changes for anyone. PagerDuty's [do
 
 After `wake me`, the sender is alone at level 1. An alert goes to that person alone. It goes to everyone else only if that person does not acknowledge it within the escalation timeout of level 1. You choose that timeout in the escalation policy.
 
-This layout has two side effects:
+This layout has three side effects:
 
-- The roster shows level 1 as `nobody`, with a warning sign, whenever nobody has asked to be woken. That is as it should be: level 2 is on call.
-- The reply to `wake me` says `you are on it, alongside whoever the schedule has`. On this schedule, that is nobody.
+- The `schedule` block of the roster shows level 1 as `nobody` whenever nobody has asked to be woken. That is as it should be: level 2 is on call, and the first line of the roster names the people at level 2.
+- The reply to `page` then says `at level 2`, because PagerDuty starts there.
+- When the reply to `wake me` has [one line for each schedule](commands.md#the-reply), that line says `you are on it, alongside whoever the schedule has`. On this schedule, that is nobody.
 
 ### Do not use the regular schedule for `wake me`
 

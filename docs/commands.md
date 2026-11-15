@@ -57,7 +57,24 @@ Wokesy answers one command at a time. It waits at most 10 seconds for PagerDuty 
 
 A page cannot be aimed at a person. The text after `page` is only what the alert says, with the sender's name in front, and PagerDuty decides who gets it. The alert follows the escalation rules of the PagerDuty service as they stand at that moment, including any override or custom shift. Every page is its own alert. Wokesy cuts an alert text that is longer than 1024 characters.
 
-Wokesy answers `Paged. PagerDuty is alerting whoever is on call.` and adds who is on call now, when it knows. It never says who exactly was alerted, because it does not know which service the alert goes to.
+Wokesy answers in one line. The line names the people whom PagerDuty alerts first, and it counts the people on call at each level behind them as backup:
+
+```
+Paged Alice. Level 2 (3 people) and Level 3 (3 people) are backup.
+```
+
+PagerDuty skips a level that has nobody on call, so the people it alerts first are the people at the first level that has anybody.
+
+| Wokesy replies | When |
+| --- | --- |
+| `Paged Alice. Level 2 (1 person) is backup.` | Alice is on call at level 1. Two people at that level are `Alice and Bob`, and three are `Alice, Bob and Carol`. |
+| `Paged Alice and Bob at level 2. Level 3 (3 people) is backup.` | Nobody is on call at level 1, so the reply says which level PagerDuty starts at. |
+| `Paged the 6 people at level 2. Level 3 (3 people) is backup.` | More than three people are on call at that level. Wokesy counts them and does not name them. It says `the 4 people at level 1` in the same way. |
+| `Paged Alice.` | Nobody is on call at a level behind Alice. A level with nobody on call is never counted as backup. |
+| `Paged, but nobody is on call at any level. Use PagerDuty directly.` | Nobody is on call at any level. Wokesy has still sent the alert to PagerDuty. |
+| `Paged. PagerDuty is alerting whoever is on call.` | Wokesy has not yet read who is on call and matched the people, or its roster has several escalation policies, or none. It then cannot tell which people the alert reaches first. |
+
+Wokesy takes the names from the roster that it read last. PagerDuty does not tell wokesy whom it alerted: it decides that from the service of the routing key and the escalation policy of that service. The names are right when that policy is the one that wokesy shows.
 
 Every page is also repeated in the on-call topic, with a silent mention of the person who sent it and their text as a quote, unless the page was sent in that topic itself. Every mention in the quoted text is made silent, so a page cannot make wokesy notify a person, a group, or everyone.
 
@@ -108,7 +125,27 @@ The longest time wokesy sets is 7 days. To change the limit, set `WOKESY_WAKE__L
 
 ### The reply
 
-The reply has one line for each schedule in `WOKESY_WAKE__SCHEDULES`. Zulip shows it like this:
+In the usual case, which the list below spells out, the reply is one line. It names the sender, repeats the duration in words, and counts the people on call at each level behind level 1 as backup:
+
+```
+Alice is now on call for 4 hours. Level 2 (3 people) and Level 3 (3 people) are backup.
+```
+
+| Wokesy replies | When |
+| --- | --- |
+| `Alice is now on call for 1 hour 30 minutes. Level 2 (1 person) is backup.` | Alice is the only person on call at level 1. |
+| `Alice is now on call for 4 hours.` | Nobody is on call at a level behind level 1. A level with nobody on call is never counted as backup. |
+| `Alice is now on call for 4 hours, together with 5 others at level 1. Level 2 (3 people) is backup.` | Other people are on call at level 1, so PagerDuty alerts all of them at once. For one other person, the reply says `together with 1 other at level 1`. |
+
+Wokesy counts those other people from the roster that it read before the command. On a shift-based schedule, they are everyone else who is on call at level 1, because the sender is added alongside them. On a legacy schedule, the sender replaces whoever was scheduled, so they are only the other people whom level 1 names directly.
+
+Wokesy gives the one-line reply only when all of this holds:
+
+- It put the sender on every schedule in `WOKESY_WAKE__SCHEDULES`.
+- Its roster has exactly one escalation policy, and every one of those schedules is at level 1 of that policy.
+- The schedules are all shift-based, or they are all legacy and level 1 has no other schedule.
+
+In every other case, the reply has one line for each schedule in `WOKESY_WAKE__SCHEDULES`. Zulip shows it like this:
 
 ```
 I'll wake you for anything until 20:00.
@@ -168,7 +205,15 @@ PagerDuty's own schedules and overrides decide again.
 
 ## `who is on call`
 
-`who is on call` shows the roster: one line for each level of each escalation policy that wokesy shows, with the time each shift ends. It is the same text as the first [on-call announcement](announcements.md#on-call-announcements). `on call`, `oncall`, `status`, and any message that starts with `who` do the same.
+`who is on call` shows the roster. The first line names the people whom PagerDuty would alert first, each with the time left on their shift. Under it is a block named `schedule`, which a reader opens to see every level of each escalation policy that wokesy shows, with the time each shift ends. Zulip shows it like this, with the block still closed:
+
+```
+On call now: Alice for 4 hours, Bob for 18 hours
+
+schedule
+```
+
+The roster has the same form as the first [on-call announcement](announcements.md#on-call-announcements), and that page explains each part of it. `on call`, `oncall`, `status`, and any message that starts with `who` do the same.
 
 ## Wokesy only ends what it made itself
 

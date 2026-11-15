@@ -2,5 +2,5 @@ import manifests
 import wokesy
 
 manifests.yaml_stream(wokesy.resources(wokesy.Release {
-    image_version = "0.1.0"
+    image_version = "0.2.0"
 }))

@@ -2,6 +2,8 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use time::macros::datetime;
+use tokio::net::TcpListener;
+use tokio::time::Instant;
 use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
 
@@ -31,6 +33,24 @@ async fn pagerduty_answering(request: Mock) -> (MockServer, Api) {
     let (server, api) = pagerduty().await;
     request.mount(&server).await;
     (server, api)
+}
+
+async fn a_server_that_never_answers() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((connection, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _kept_open = connection;
+                std::future::pending::<()>().await;
+            });
+        }
+    });
+    format!("http://{address}")
+}
+
+fn gave_up_waiting<T: std::fmt::Debug>(answer: &Result<T, ApiError>) -> bool {
+    matches!(answer, Err(ApiError::Request(error)) if error.is_timeout())
 }
 
 fn get(asked: &str) -> MockBuilder {
@@ -394,6 +414,47 @@ async fn an_override_is_deleted_by_its_id_and_both_204_and_200_are_success() {
             .await
             .unwrap();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_override_that_pagerduty_does_not_answer_is_given_up_after_ten_seconds() {
+    let api = api_at(&a_server_that_never_answers().await);
+    let ten_seconds = Duration::from_secs(10)..Duration::from_secs(11);
+
+    let asked = Instant::now();
+    let created = created_override(&api).await;
+    let waited_to_create = asked.elapsed();
+    let asked = Instant::now();
+    let deleted = api
+        .delete_schedule_override(&schedule_id("PI7DH85"), &override_id("PQ47DCP"))
+        .await;
+    let waited_to_delete = asked.elapsed();
+
+    assert!(gave_up_waiting(&created), "{created:?}");
+    assert!(gave_up_waiting(&deleted), "{deleted:?}");
+    assert!(
+        ten_seconds.contains(&waited_to_create),
+        "{waited_to_create:?}"
+    );
+    assert!(
+        ten_seconds.contains(&waited_to_delete),
+        "{waited_to_delete:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_read_that_pagerduty_does_not_answer_is_given_up_after_thirty_seconds() {
+    let api = api_at(&a_server_that_never_answers().await);
+
+    let asked = Instant::now();
+    let users = api.users().await;
+    let waited = asked.elapsed();
+
+    assert!(gave_up_waiting(&users), "{users:?}");
+    assert!(
+        (Duration::from_secs(30)..Duration::from_secs(31)).contains(&waited),
+        "{waited:?}"
+    );
 }
 
 #[tokio::test]

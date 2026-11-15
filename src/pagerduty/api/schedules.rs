@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -8,6 +10,7 @@ use super::{Api, ApiError, Reference, done, read};
 
 const SCHEDULES: &str = "schedules";
 const OVERRIDES: &str = "overrides";
+const LONGEST_WAIT_FOR_AN_OVERRIDE: Duration = Duration::from_secs(10);
 
 #[derive(Serialize)]
 struct NewOverride<'a> {
@@ -92,6 +95,7 @@ impl Api {
         };
         let request = self
             .request(Method::POST, &[SCHEDULES, schedule, OVERRIDES])
+            .timeout(LONGEST_WAIT_FOR_AN_OVERRIDE)
             .json(&new);
         let Created(id) = read(request).await?;
         Ok(id)
@@ -102,7 +106,10 @@ impl Api {
         schedule: &ScheduleId,
         id: &OverrideId,
     ) -> Result<(), ApiError> {
-        done(self.request(Method::DELETE, &[SCHEDULES, schedule, OVERRIDES, id])).await
+        let request = self
+            .request(Method::DELETE, &[SCHEDULES, schedule, OVERRIDES, id])
+            .timeout(LONGEST_WAIT_FOR_AN_OVERRIDE);
+        done(request).await
     }
 }
 

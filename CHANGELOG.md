@@ -4,6 +4,24 @@ Rendered by [git-cliff](https://git-cliff.org) from the conventional commits
 behind each tag. `release` rewrites this file in full on every release, so an
 edit made here is lost — edit the commit messages instead.
 
+## v0.3.0 — 2026-11-15
+
+### Features
+
+- **wake**: take woke me as wake me ([616e624](https://github.com/lakinwecker/wokesy/commit/616e62464a10daca8a3be1b778b5a853a243cd94))
+- **on_call**: sum the roster up in one line and hide the levels in a spoiler ([f9c1e31](https://github.com/lakinwecker/wokesy/commit/f9c1e31de42b18479173dcb28de3abec1b296887))
+- **wake**: answer page and wake me in one line ([52116e9](https://github.com/lakinwecker/wokesy/commit/52116e960fcda3e440dd2452d6516cbddc817f25))
+
+### Documentation
+
+- move the detail out of the readme into docs/ ([7f6cfa2](https://github.com/lakinwecker/wokesy/commit/7f6cfa255bf6cf5787b19663f0f041f287fa2f3e))
+- write the readme in complete sentences with wokesy and pagerduty as the actors ([3df4e5d](https://github.com/lakinwecker/wokesy/commit/3df4e5db0f3cb5dbb67589eebabe7e4c66482419))
+- describe the shorter roster, page, and wake me messages ([d5c0930](https://github.com/lakinwecker/wokesy/commit/d5c093008f971a65efb25e5102d203f2a1269cb9))
+
+### Tooling
+
+- **deploy**: deploy production 0.2.0 ([a63a455](https://github.com/lakinwecker/wokesy/commit/a63a4555b12b087a101700be2dba65c5fb709cd1))
+
 ## v0.2.0 — 2026-11-15
 
 ### Features

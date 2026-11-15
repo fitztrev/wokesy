@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use humantime::{FormattedDuration, format_duration};
+use time::OffsetDateTime;
 use tokio::time::Instant;
 
 use super::{Answer, Commands};
@@ -99,7 +100,10 @@ fn seconds_begun(remaining: Duration) -> u64 {
 
 fn paged(read: Option<&(Roster, Directory)>) -> String {
     match read {
-        Some((roster, directory)) => format!("{PAGED}\n\n{}", on_call_now(roster, directory)),
+        Some((roster, directory)) => format!(
+            "{PAGED}\n\n{}",
+            on_call_now(roster, directory, OffsetDateTime::now_utc())
+        ),
         None => PAGED.to_owned(),
     }
 }

@@ -48,7 +48,7 @@ impl FakeZulip {
 }
 
 fn message() -> OutgoingMessage {
-    OutgoingMessage::new(":pager: **On call now**\n- **Lichess**, level 1: @_**|12**".to_owned())
+    OutgoingMessage::new(":pager: **On call now:** @_**|12**".to_owned())
 }
 
 fn form(fields: &[(&str, &str)]) -> BTreeMap<String, String> {

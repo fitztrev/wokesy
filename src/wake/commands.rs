@@ -5,6 +5,7 @@ mod waking;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use time::OffsetDateTime;
 use tokio::sync::{Notify, watch};
 
 use super::config::Config;
@@ -153,7 +154,9 @@ impl Commands {
             }
             (Command::Stop, Some((_, directory))) => self.stop(message.sender, &directory).await,
             (Command::Reset, Some((_, directory))) => self.reset(message.sender, &directory).await,
-            (Command::Who, Some((roster, directory))) => on_call_now(&roster, &directory),
+            (Command::Who, Some((roster, directory))) => {
+                on_call_now(&roster, &directory, OffsetDateTime::now_utc())
+            }
         };
         Answer::only(reply)
     }

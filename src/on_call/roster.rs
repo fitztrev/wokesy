@@ -79,6 +79,43 @@ impl Roster {
 }
 
 impl Policy {
+    /// ```
+    /// use wokesy::on_call::{Level, Policy, Shift};
+    /// use wokesy::pagerduty::{
+    ///     EscalationLevel, EscalationPolicyId, EscalationPolicyName, UserId, UserRef,
+    /// };
+    /// use wokesy::people::Name;
+    ///
+    /// let carol = Shift {
+    ///     user: UserRef {
+    ///         id: UserId::try_new("PCAROL1").unwrap(),
+    ///         name: Name::try_new("Carol Example").unwrap(),
+    ///     },
+    ///     ends: None,
+    /// };
+    /// let level = |number: u32, shifts: &[Shift]| Level {
+    ///     number: EscalationLevel::new(number),
+    ///     schedules: vec![],
+    ///     people: vec![],
+    ///     shifts: shifts.to_vec(),
+    /// };
+    /// let policy = |levels: Vec<Level>| Policy {
+    ///     id: EscalationPolicyId::try_new("PANZZEQ").unwrap(),
+    ///     name: EscalationPolicyName::try_new("Engineering").unwrap(),
+    ///     levels,
+    /// };
+    ///
+    /// let skipping_the_first = policy(vec![level(1, &[]), level(2, &[carol.clone()]), level(3, &[carol])]);
+    /// let with_nobody = policy(vec![level(1, &[])]);
+    ///
+    /// assert_eq!(skipping_the_first.alerted_first().map(|level| level.number.into_inner()), Some(2));
+    /// assert_eq!(with_nobody.alerted_first(), None);
+    /// ```
+    #[must_use]
+    pub fn alerted_first(&self) -> Option<&Level> {
+        self.levels.iter().find(|level| !level.shifts.is_empty())
+    }
+
     fn of(policy: EscalationPolicy, shifts: &mut ShiftsByLevel) -> Self {
         let levels = (FIRST_LINE..)
             .map(EscalationLevel::new)

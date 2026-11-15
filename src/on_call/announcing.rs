@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use time::OffsetDateTime;
 use tokio::sync::watch;
 
 use super::changes::changes;
@@ -52,14 +53,17 @@ fn announcement(
     latest: &Roster,
     directory: &Directory,
 ) -> Option<OutgoingMessage> {
+    let now = OffsetDateTime::now_utc();
     let Some(announced) = announced else {
-        return Some(OutgoingMessage::new(on_call_now(latest, directory)));
+        return Some(OutgoingMessage::new(on_call_now(latest, directory, now)));
     };
     let changes = changes(announced, latest);
     if changes.is_empty() {
         return None;
     }
-    Some(OutgoingMessage::new(on_call_changed(&changes, directory)))
+    Some(OutgoingMessage::new(on_call_changed(
+        &changes, latest, directory, now,
+    )))
 }
 
 #[cfg(test)]

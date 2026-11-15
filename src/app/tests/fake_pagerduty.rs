@@ -7,6 +7,8 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use url::Url;
@@ -22,7 +24,7 @@ pub const ENQUEUE: &str = "/v2/enqueue";
 pub const ON_CALL: &str = "/oncalls";
 
 const LICHESS: &str = "PLICHES";
-const BOB_IS_ON_CALL_UNTIL: &str = "2026-11-14T20:00:00Z";
+const BOB_IS_ON_CALL_FOR: Duration = Duration::from_mins(270);
 const SHIFT_BASED: &str = "This is a shift-based schedule. Use the v3 Schedules API to access it.";
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -49,6 +51,7 @@ enum Rota {
 #[derive(Clone)]
 struct Account {
     rota: Rota,
+    bob_is_on_call_until: String,
     asked: watch::Sender<Vec<Asked>>,
     overriding: watch::Sender<Option<Value>>,
     custom_shift: watch::Sender<Option<Value>>,
@@ -70,8 +73,14 @@ impl FakePagerDuty {
     }
 
     async fn start_with(rota: Rota) -> Self {
+        let bob_is_on_call_until = (OffsetDateTime::now_utc() + BOB_IS_ON_CALL_FOR)
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap();
         let account = Account {
             rota,
+            bob_is_on_call_until,
             asked: watch::Sender::new(Vec::new()),
             overriding: watch::Sender::new(None),
             custom_shift: watch::Sender::new(None),
@@ -85,6 +94,10 @@ impl FakePagerDuty {
             url: format!("http://{address}").parse().unwrap(),
             account,
         }
+    }
+
+    pub fn bob_is_on_call_until(&self) -> &str {
+        &self.account.bob_is_on_call_until
     }
 
     pub fn asked(&self) -> Vec<Asked> {
@@ -144,7 +157,7 @@ async fn answer(
         ("GET", ON_CALL) => (
             StatusCode::OK,
             on_call(
-                account.rota,
+                &account,
                 account.overriding.borrow().as_ref(),
                 account.custom_shift.borrow().as_ref(),
             ),
@@ -263,10 +276,12 @@ fn escalation_policies(rota: Rota) -> Value {
     page("escalation_policies", &json!([unused, lichess]))
 }
 
-fn on_call(rota: Rota, overriding: Option<&Value>, custom_shift: Option<&Value>) -> Value {
+fn on_call(account: &Account, overriding: Option<&Value>, custom_shift: Option<&Value>) -> Value {
+    let rota = account.rota;
+    let bob_is_on_call_until = account.bob_is_on_call_until.as_str();
     let lichess =
         json!({ "id": LICHESS, "type": "escalation_policy_reference", "summary": "Lichess" });
-    let (first, until) = overriding.map_or((BOB, BOB_IS_ON_CALL_UNTIL), |overriding| {
+    let (first, until) = overriding.map_or((BOB, bob_is_on_call_until), |overriding| {
         (
             overriding["user"]["id"].as_str().unwrap(),
             overriding["end"].as_str().unwrap(),

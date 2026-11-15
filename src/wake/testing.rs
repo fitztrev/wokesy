@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 use serde_json::{Value, json};
-use time::macros::datetime;
 use tokio::sync::{Notify, watch};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -29,9 +28,15 @@ pub const PRIMARY_SHIFTS: &str = "/v3/schedules/PI7DH85/custom_shifts";
 pub const ENQUEUE: &str = "/v2/enqueue";
 
 pub const ON_CALL_NOW: &str = "\
-:pager: **On call now**
-- **Lichess**, level 1: @_**|13** until <time:2026-11-14T20:00:00Z>
-- **Lichess**, level 2: Carol Example";
+:pager: **On call now:** @_**|13**
+
+```spoiler schedule
+**Lichess · Level 1**
+- @_**|13**
+
+**Lichess · Level 2**
+- Carol Example
+```";
 
 const A_MOMENT: Duration = Duration::from_millis(50);
 const SHIFT_BASED: &str = "This is a shift-based schedule. Use the v3 Schedules API to access it.";
@@ -321,7 +326,7 @@ pub fn lichess_alone() -> Roster {
     let first = Level {
         shifts: vec![Shift {
             user: bob,
-            ends: Some(datetime!(2026-11-14 20:00 UTC)),
+            ends: None,
         }],
         ..level(1, &[primary_rota()], &[])
     };

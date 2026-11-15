@@ -1,19 +1,23 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 
-use time::macros::datetime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::*;
-use crate::chat::{ChannelName, DeliveryError, TopicName};
+use crate::chat::{ChannelName, DeliveryError, TopicName, time_tag};
 use crate::on_call::Shift;
 use crate::on_call::testing::{directory, level, policy, roster, shift, user};
 
 const PATIENCE: Duration = Duration::from_mins(1);
 const A_LONG_TIME: Duration = Duration::from_hours(1);
+const FOUR_AND_A_HALF_HOURS: Duration = Duration::from_mins(270);
+const HALF_A_DAY: Duration = Duration::from_hours(12);
+
+static THIS_EVENING: LazyLock<OffsetDateTime> =
+    LazyLock::new(|| OffsetDateTime::now_utc() + FOUR_AND_A_HALF_HOURS);
 
 #[derive(Clone, Debug)]
 struct RecordingMessenger {
@@ -65,10 +69,15 @@ fn on_call_topic() -> Conversation {
 }
 
 fn alice() -> Shift {
-    shift(
-        user("PALICE1", "Alice Example"),
-        Some(datetime!(2026-11-14 20:00 UTC)),
-    )
+    shift(user("PALICE1", "Alice Example"), Some(*THIS_EVENING))
+}
+
+fn this_evening() -> String {
+    time_tag(*THIS_EVENING)
+}
+
+fn first_announcement_of(roster: &Roster) -> String {
+    on_call_now(roster, &alice_and_bob_in_chat(), OffsetDateTime::now_utc())
 }
 
 fn bob() -> Shift {
@@ -166,7 +175,7 @@ async fn the_first_announcement_is_who_is_on_call_now_in_the_given_conversation(
         announcing.next_attempt().await,
         Attempt {
             to: on_call_topic(),
-            markdown: on_call_now(&now, &alice_and_bob_in_chat()),
+            markdown: first_announcement_of(&now),
             delivered: true,
         }
     );
@@ -184,10 +193,19 @@ async fn nothing_is_announced_until_people_are_matched() {
 
     assert_eq!(
         announcing.next_announcement().await,
-        "\
-:pager: **On call now**
-- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z>
-- **Lichess**, level 2: :warning: nobody"
+        format!(
+            "\
+:pager: **On call now:** @_**|12** for 4 hours
+
+```spoiler schedule
+**Lichess · Level 1**
+- @_**|12** until {}
+
+**Lichess · Level 2**
+- nobody
+```",
+            this_evening()
+        )
     );
 }
 
@@ -201,9 +219,15 @@ async fn nothing_is_announced_until_the_roster_is_read() {
     assert_eq!(
         announcing.next_announcement().await,
         "\
-:pager: **On call now**
-- **Lichess**, level 1: :warning: nobody
-- **Lichess**, level 2: Carol Example"
+:pager: **On call now:** Carol Example
+
+```spoiler schedule
+**Lichess · Level 1**
+- nobody
+
+**Lichess · Level 2**
+- Carol Example
+```"
     );
 }
 
@@ -216,9 +240,17 @@ async fn a_later_change_announces_only_the_levels_that_changed() {
 
     assert_eq!(
         announcing.next_announcement().await,
-        "\
-:pager: **On call changed**
-- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z> (was @_**|13**)"
+        format!(
+            "\
+:pager: **On call changed:** @_**|12** for 4 hours
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|12** until {}
+- was: @_**|13**
+```",
+            this_evening()
+        )
     );
     announcing.announces_nothing().await;
 }
@@ -234,9 +266,17 @@ async fn each_change_is_announced_against_the_roster_announced_before_it() {
 
     assert_eq!(
         announcing.next_announcement().await,
-        "\
-:pager: **On call changed**
-- **Lichess**, level 2: @_**|12** until <time:2026-11-14T20:00:00Z> (was Carol Example)"
+        format!(
+            "\
+:pager: **On call changed:** @_**|13**
+
+```spoiler changes
+**Lichess · Level 2**
+- @_**|12** until {}
+- was: Carol Example
+```",
+            this_evening()
+        )
     );
 }
 
@@ -245,7 +285,7 @@ async fn a_roster_with_the_same_people_on_call_announces_nothing() {
     let mut announcing = Announcing::knowing_everyone(lichess(&[alice()], &[bob()]));
     announcing.next_announcement().await;
     let later = Shift {
-        ends: Some(datetime!(2026-11-15 08:00 UTC)),
+        ends: Some(*THIS_EVENING + HALF_A_DAY),
         ..alice()
     };
 
@@ -256,8 +296,13 @@ async fn a_roster_with_the_same_people_on_call_announces_nothing() {
     assert_eq!(
         announcing.next_announcement().await,
         "\
-:pager: **On call changed**
-- **Lichess**, level 2: Carol Example (was @_**|13**)"
+:pager: **On call changed:** @_**|12** for 16 hours
+
+```spoiler changes
+**Lichess · Level 2**
+- Carol Example
+- was: @_**|13**
+```"
     );
 }
 
@@ -275,8 +320,13 @@ async fn a_change_is_announced_with_the_people_matched_by_then() {
     assert_eq!(
         announcing.next_announcement().await,
         "\
-:pager: **On call changed**
-- **Lichess**, level 1: @_**|14** (was @_**|12**)"
+:pager: **On call changed:** @_**|14**
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|14**
+- was: @_**|12**
+```"
     );
 }
 
@@ -297,7 +347,7 @@ async fn a_failed_delivery_is_tried_again_after_thirty_seconds_with_the_roster_a
         failed,
         Attempt {
             to: on_call_topic(),
-            markdown: on_call_now(&first, &alice_and_bob_in_chat()),
+            markdown: first_announcement_of(&first),
             delivered: false,
         }
     );
@@ -305,7 +355,7 @@ async fn a_failed_delivery_is_tried_again_after_thirty_seconds_with_the_roster_a
         retried,
         Attempt {
             to: on_call_topic(),
-            markdown: on_call_now(&second, &alice_and_bob_in_chat()),
+            markdown: first_announcement_of(&second),
             delivered: true,
         }
     );
@@ -328,8 +378,13 @@ async fn a_roster_counts_as_announced_only_once_its_announcement_was_delivered()
     assert_eq!(
         announcing.next_announcement().await,
         "\
-:pager: **On call changed**
-- **Lichess**, level 1: Carol Example (was @_**|12**)"
+:pager: **On call changed:** Carol Example
+
+```spoiler changes
+**Lichess · Level 1**
+- Carol Example
+- was: @_**|12**
+```"
     );
     announcing.announces_nothing().await;
 }

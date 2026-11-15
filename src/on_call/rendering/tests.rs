@@ -4,6 +4,8 @@ use super::*;
 use crate::on_call::changes::changes;
 use crate::on_call::testing::{directory, level, policy, roster, shift, user};
 
+const NOW: OffsetDateTime = datetime!(2026-11-14 16:00 UTC);
+
 fn alice() -> UserRef {
     user("PALICE1", "Alice Example")
 }
@@ -32,59 +34,197 @@ fn lichess(first_line: &[Shift]) -> Roster {
     roster(&[policy("PLICHES", "Lichess", &[level(1, first_line)])])
 }
 
+fn now(roster: &Roster) -> String {
+    on_call_now(roster, &alice_and_bob_in_chat(), NOW)
+}
+
 fn changed(announced: &Roster, latest: &Roster) -> String {
-    on_call_changed(&changes(announced, latest), &alice_and_bob_in_chat())
+    on_call_changed(
+        &changes(announced, latest),
+        latest,
+        &alice_and_bob_in_chat(),
+        NOW,
+    )
 }
 
 #[test]
-fn on_call_now_has_a_line_for_each_level_of_each_policy() {
+fn on_call_now_is_a_line_of_who_is_alerted_first_and_a_hidden_schedule_of_every_level() {
+    let roster = roster(&[policy(
+        "PDEFAUL",
+        "Default",
+        &[
+            level(
+                1,
+                &[
+                    until_the_evening(alice()),
+                    shift(bob(), Some(datetime!(2026-11-15 10:00 UTC))),
+                    shift(carol(), Some(datetime!(2026-11-14 18:00 UTC))),
+                ],
+            ),
+            level(
+                2,
+                &[
+                    shift(alice(), Some(datetime!(2027-02-25 18:14:36 UTC))),
+                    open_ended(carol()),
+                ],
+            ),
+        ],
+    )]);
+
+    assert_eq!(
+        now(&roster),
+        "\
+:pager: **On call now:** @_**|12** for 4 hours, @_**|13** for 18 hours, Carol Example for 2 hours
+
+```spoiler schedule
+**Default · Level 1**
+- @_**|12** until <time:2026-11-14T20:00:00Z>
+- @_**|13** until <time:2026-11-15T10:00:00Z>
+- Carol Example until <time:2026-11-14T18:00:00Z>
+
+**Default · Level 2**
+- @_**|12** until <time:2027-02-25T18:14:36Z>
+- Carol Example
+```"
+    );
+}
+
+#[test]
+fn the_first_level_that_has_anybody_is_alerted_first_and_a_level_with_nobody_says_so() {
+    let roster = roster(&[policy(
+        "PLICHES",
+        "Lichess",
+        &[
+            level(1, &[]),
+            level(2, &[open_ended(alice()), until_the_evening(carol())]),
+            level(3, &[open_ended(bob())]),
+            level(4, &[]),
+        ],
+    )]);
+
+    assert_eq!(
+        now(&roster),
+        "\
+:pager: **On call now:** @_**|12**, Carol Example for 4 hours
+
+```spoiler schedule
+**Lichess · Level 1**
+- nobody
+
+**Lichess · Level 2**
+- @_**|12**
+- Carol Example until <time:2026-11-14T20:00:00Z>
+
+**Lichess · Level 3**
+- @_**|13**
+
+**Lichess · Level 4**
+- nobody
+```"
+    );
+}
+
+#[test]
+fn with_several_policies_the_first_level_with_anybody_of_each_is_alerted_and_a_person_is_named_once()
+ {
     let roster = roster(&[
         policy(
             "PLICHES",
             "Lichess",
             &[
                 level(1, &[until_the_evening(alice())]),
-                level(2, &[open_ended(bob()), open_ended(carol())]),
+                level(2, &[open_ended(bob())]),
             ],
         ),
         policy(
             "PMODERA",
             "Moderation",
-            &[level(1, &[until_the_evening(carol())])],
+            &[
+                level(1, &[]),
+                level(2, &[open_ended(alice()), open_ended(carol())]),
+            ],
         ),
+        policy("PSPARE1", "Spare", &[level(1, &[])]),
     ]);
 
     assert_eq!(
-        on_call_now(&roster, &alice_and_bob_in_chat()),
+        now(&roster),
         "\
-:pager: **On call now**
-- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z>
-- **Lichess**, level 2: @_**|13**, Carol Example
-- **Moderation**, level 1: Carol Example until <time:2026-11-14T20:00:00Z>"
+:pager: **On call now:** @_**|12** for 4 hours, Carol Example
+
+```spoiler schedule
+**Lichess · Level 1**
+- @_**|12** until <time:2026-11-14T20:00:00Z>
+
+**Lichess · Level 2**
+- @_**|13**
+
+**Moderation · Level 1**
+- nobody
+
+**Moderation · Level 2**
+- @_**|12**
+- Carol Example
+
+**Spare · Level 1**
+- nobody
+```"
     );
 }
 
 #[test]
-fn a_level_with_nobody_on_call_is_a_warning() {
+fn with_nobody_on_call_at_any_level_the_first_line_warns() {
     let roster = roster(&[policy(
         "PLICHES",
         "Lichess",
-        &[level(1, &[open_ended(alice())]), level(2, &[])],
+        &[level(1, &[]), level(2, &[])],
     )]);
 
     assert_eq!(
-        on_call_now(&roster, &alice_and_bob_in_chat()),
+        now(&roster),
         "\
-:pager: **On call now**
-- **Lichess**, level 1: @_**|12**
-- **Lichess**, level 2: :warning: nobody"
+:pager: **On call now:** :warning: nobody
+
+```spoiler schedule
+**Lichess · Level 1**
+- nobody
+
+**Lichess · Level 2**
+- nobody
+```"
     );
+}
+
+#[test]
+fn the_time_left_is_counted_from_the_moment_given_in_one_unit_and_never_less_than_a_minute() {
+    let roster = lichess(&[until_the_evening(alice())]);
+    let left_at = |now: OffsetDateTime| {
+        let said = on_call_now(&roster, &alice_and_bob_in_chat(), now);
+        said.lines().next().unwrap().to_owned()
+    };
+
+    for (now, left) in [
+        (datetime!(2026-09-01 20:00 UTC), "2 months"),
+        (datetime!(2026-11-12 19:00 UTC), "2 days"),
+        (datetime!(2026-11-14 16:00 UTC), "4 hours"),
+        (datetime!(2026-11-14 16:01 UTC), "3 hours"),
+        (datetime!(2026-11-14 19:15 UTC), "45 minutes"),
+        (datetime!(2026-11-14 19:59:50 UTC), "1 minute"),
+        (datetime!(2026-11-14 20:00 UTC), "1 minute"),
+        (datetime!(2026-11-14 23:00 UTC), "1 minute"),
+    ] {
+        assert_eq!(
+            left_at(now),
+            format!(":pager: **On call now:** @_**|12** for {left}"),
+            "{now}"
+        );
+    }
 }
 
 #[test]
 fn without_a_policy_in_use_nobody_is_on_call() {
     assert_eq!(
-        on_call_now(&roster(&[]), &alice_and_bob_in_chat()),
+        now(&roster(&[])),
         "\
 :pager: **On call now**
 No escalation policy is used by a service, so nobody is on call."
@@ -98,7 +238,7 @@ fn nobody_is_named_with_a_mention_that_notifies_them() {
         open_ended(bob()),
         open_ended(carol()),
     ];
-    let now = on_call_now(&lichess(&everyone), &alice_and_bob_in_chat());
+    let now = now(&lichess(&everyone));
     let change = changed(&lichess(&everyone), &lichess(&[]));
 
     assert!(!now.contains("@**"), "{now}");
@@ -116,35 +256,58 @@ fn a_name_from_pagerduty_that_holds_a_mention_cannot_notify() {
             &[level(1, shifts)],
         )])
     };
-    let on_call = named_to_ping(&[open_ended(everyone), open_ended(group)]);
-
-    let now = on_call_now(&on_call, &alice_and_bob_in_chat());
-    let change = changed(&on_call, &named_to_ping(&[]));
+    let on_call = named_to_ping(&[until_the_evening(everyone), open_ended(group)]);
 
     assert_eq!(
-        now,
+        now(&on_call),
         "\
-:pager: **On call now**
-- **Ops @_**Carol Example****, level 1: @_**all**, x @_*sysadmins*"
+:pager: **On call now:** @_**all** for 4 hours, x @_*sysadmins*
+
+```spoiler schedule
+**Ops @_**Carol Example** · Level 1**
+- @_**all** until <time:2026-11-14T20:00:00Z>
+- x @_*sysadmins*
+```"
     );
     assert_eq!(
-        change,
+        changed(&on_call, &named_to_ping(&[])),
         "\
-:pager: **On call changed**
-- **Ops @_**Carol Example****, level 1: :warning: nobody (was @_**all**, x @_*sysadmins*)"
+:pager: **On call changed:** :warning: nobody
+
+```spoiler changes
+**Ops @_**Carol Example** · Level 1**
+- nobody
+- was: @_**all**, x @_*sysadmins*
+```"
     );
 }
 
 #[test]
-fn a_change_names_who_is_on_call_at_the_level_and_who_was() {
-    let announced = lichess(&[until_the_evening(bob())]);
-    let latest = lichess(&[until_the_evening(alice())]);
+fn a_change_is_a_line_of_who_is_alerted_first_now_and_the_hidden_levels_that_changed() {
+    let before = |second_line: &[Shift]| {
+        roster(&[policy(
+            "PLICHES",
+            "Lichess",
+            &[
+                level(1, &[until_the_evening(alice())]),
+                level(2, second_line),
+            ],
+        )])
+    };
+    let announced = before(&[until_the_evening(bob())]);
+    let latest = before(&[until_the_evening(bob()), open_ended(carol())]);
 
     assert_eq!(
         changed(&announced, &latest),
         "\
-:pager: **On call changed**
-- **Lichess**, level 1: @_**|12** until <time:2026-11-14T20:00:00Z> (was @_**|13**)"
+:pager: **On call changed:** @_**|12** for 4 hours
+
+```spoiler changes
+**Lichess · Level 2**
+- @_**|13** until <time:2026-11-14T20:00:00Z>
+- Carol Example
+- was: @_**|13**
+```"
     );
 }
 
@@ -160,8 +323,13 @@ fn a_change_lists_everyone_who_was_on_call_without_their_shift_ends() {
     assert_eq!(
         changed(&announced, &latest),
         "\
-:pager: **On call changed**
-- **Lichess**, level 1: Carol Example (was @_**|12**, @_**|13**, Carol Example)"
+:pager: **On call changed:** Carol Example
+
+```spoiler changes
+**Lichess · Level 1**
+- Carol Example
+- was: @_**|12**, @_**|13**, Carol Example
+```"
     );
 }
 
@@ -175,14 +343,22 @@ fn a_change_from_nobody_and_a_change_to_nobody_say_so() {
     let latest = roster(&[policy(
         "PLICHES",
         "Lichess",
-        &[level(1, &[open_ended(alice())]), level(2, &[])],
+        &[level(1, &[until_the_evening(alice())]), level(2, &[])],
     )]);
 
     assert_eq!(
         changed(&announced, &latest),
         "\
-:pager: **On call changed**
-- **Lichess**, level 1: @_**|12** (was nobody)
-- **Lichess**, level 2: :warning: nobody (was @_**|13**)"
+:pager: **On call changed:** @_**|12** for 4 hours
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|12** until <time:2026-11-14T20:00:00Z>
+- was: nobody
+
+**Lichess · Level 2**
+- nobody
+- was: @_**|13**
+```"
     );
 }

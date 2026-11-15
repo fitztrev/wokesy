@@ -11,9 +11,15 @@ use crate::wake::testing::{ALICE, Answering, BOB, ENQUEUE, STRANGER, Setup, in_s
 const PAGED_AND_ON_CALL_NOW: &str = "\
 :rotating_light: Paged. PagerDuty is alerting whoever is on call.
 
-:pager: **On call now**
-- **Lichess**, level 1: @_**|13** until <time:2026-11-14T20:00:00Z>
-- **Lichess**, level 2: Carol Example";
+:pager: **On call now:** @_**|13**
+
+```spoiler schedule
+**Lichess · Level 1**
+- @_**|13**
+
+**Lichess · Level 2**
+- Carol Example
+```";
 
 async fn paging() -> Answering {
     let answering = Setup::default().start().await;

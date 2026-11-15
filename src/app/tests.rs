@@ -28,10 +28,6 @@ const LONGEST_TELEMETRY_SHUTDOWN: Duration = Duration::from_secs(10);
 const ROUTING_KEY: &str = "samplekeyhere";
 const SYSADMIN: &str = "sysadmin";
 const STATUS: &str = "wokesy status";
-const ON_CALL_NOW: &str = "\
-:pager: **On call now**
-- **Lichess**, level 1: @_**|13** until <time:2026-11-14T20:00:00Z>
-- **Lichess**, level 2: Carol Example";
 
 struct Wokesy {
     pagerduty: FakePagerDuty,
@@ -50,6 +46,22 @@ fn topic(name: &str) -> Conversation {
         channel: channel(SYSADMIN),
         topic: TopicName::try_new(name).unwrap(),
     }
+}
+
+fn on_call_now(pagerduty: &FakePagerDuty) -> String {
+    format!(
+        "\
+:pager: **On call now:** @_**|{BOB}** for 4 hours
+
+```spoiler schedule
+**Lichess · Level 1**
+- @_**|{BOB}** until <time:{}>
+
+**Lichess · Level 2**
+- Carol Example
+```",
+        pagerduty.bob_is_on_call_until()
+    )
 }
 
 fn on_call_topic() -> Conversation {
@@ -188,7 +200,7 @@ async fn who_is_on_call_is_announced_after_start_naming_matched_people_silently(
 
     let announced = wokesy.zulip.posts_in(on_call_topic()).next().await;
 
-    assert_eq!(announced, ON_CALL_NOW);
+    assert_eq!(announced, on_call_now(&wokesy.pagerduty));
 }
 
 #[tokio::test]
@@ -200,14 +212,14 @@ async fn a_mention_asking_who_is_on_call_is_answered_in_its_topic() {
         .mention(ALICE, SYSADMIN, "incident", "who is on call");
 
     let answer = wokesy.zulip.posts_in(incident_topic()).next().await;
-    assert_eq!(answer, ON_CALL_NOW);
+    assert_eq!(answer, on_call_now(&wokesy.pagerduty));
 }
 
 #[tokio::test]
 async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_straight_away() {
     let wokesy = Wokesy::settled().await;
     let mut announcements = wokesy.zulip.posts_in(on_call_topic());
-    assert_eq!(announcements.next().await, ON_CALL_NOW);
+    assert_eq!(announcements.next().await, on_call_now(&wokesy.pagerduty));
 
     wokesy
         .zulip
@@ -243,8 +255,14 @@ async fn wake_me_overrides_the_configured_schedule_and_the_change_is_announced_s
     assert_eq!(
         announced,
         format!(
-            ":pager: **On call changed**\n\
-             - **Lichess**, level 1: @_**|{ALICE}** until <time:{until}> (was @_**|{BOB}**)"
+            "\
+:pager: **On call changed:** @_**|{ALICE}** for 4 hours
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|{ALICE}** until <time:{until}>
+- was: @_**|{BOB}**
+```"
         )
     );
     let overridden = asked.iter().position(|asked| asked == created).unwrap();
@@ -260,7 +278,7 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
     let wokesy = Wokesy::settled_on(FakePagerDuty::start_with_a_shift_based_rota().await).await;
     let mut announcements = wokesy.zulip.posts_in(on_call_topic());
     let mut answers = wokesy.zulip.posts_in(incident_topic());
-    assert_eq!(announcements.next().await, ON_CALL_NOW);
+    assert_eq!(announcements.next().await, on_call_now(&wokesy.pagerduty));
 
     wokesy
         .zulip
@@ -280,6 +298,7 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
     let shift = &created.body["custom_shifts"][0];
     let moment = |field: &str| OffsetDateTime::parse(shift[field].as_str().unwrap(), &Rfc3339);
     let until = shift["end_time"].as_str().unwrap();
+    let bob_until = wokesy.pagerduty.bob_is_on_call_until();
     assert!(refused.is(&Method::POST, PRIMARY_ROTA_OVERRIDES));
     assert!(created.is(&Method::POST, PRIMARY_ROTA_SHIFTS));
     assert!(deleted.is(&Method::DELETE, PRIMARY_ROTA_SHIFT));
@@ -305,8 +324,15 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
     assert_eq!(
         added,
         format!(
-            ":pager: **On call changed**\n\
-             - **Lichess**, level 1: @_**|{ALICE}** until <time:{until}>, @_**|{BOB}** until <time:2026-11-14T20:00:00Z> (was @_**|{BOB}**)"
+            "\
+:pager: **On call changed:** @_**|{ALICE}** for 4 hours, @_**|{BOB}** for 4 hours
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|{ALICE}** until <time:{until}>
+- @_**|{BOB}** until <time:{bob_until}>
+- was: @_**|{BOB}**
+```"
         )
     );
     assert_eq!(
@@ -316,8 +342,14 @@ async fn on_a_shift_based_schedule_wake_me_adds_a_custom_shift_and_stop_waking_m
     assert_eq!(
         removed,
         format!(
-            ":pager: **On call changed**\n\
-             - **Lichess**, level 1: @_**|{BOB}** until <time:2026-11-14T20:00:00Z> (was @_**|{ALICE}**, @_**|{BOB}**)"
+            "\
+:pager: **On call changed:** @_**|{BOB}** for 4 hours
+
+```spoiler changes
+**Lichess · Level 1**
+- @_**|{BOB}** until <time:{bob_until}>
+- was: @_**|{ALICE}**, @_**|{BOB}**
+```"
         )
     );
 }
@@ -343,7 +375,7 @@ async fn a_direct_message_is_pointed_to_the_open_channels_and_changes_nothing_in
 async fn a_page_alerts_through_the_events_api_and_is_quoted_in_the_on_call_topic() {
     let wokesy = Wokesy::settled().await;
     let mut announcements = wokesy.zulip.posts_in(on_call_topic());
-    assert_eq!(announcements.next().await, ON_CALL_NOW);
+    assert_eq!(announcements.next().await, on_call_now(&wokesy.pagerduty));
 
     wokesy
         .zulip
@@ -372,7 +404,8 @@ async fn a_page_alerts_through_the_events_api_and_is_quoted_in_the_on_call_topic
     assert_eq!(
         answer,
         format!(
-            ":rotating_light: Paged. PagerDuty is alerting whoever is on call.\n\n{ON_CALL_NOW}"
+            ":rotating_light: Paged. PagerDuty is alerting whoever is on call.\n\n{}",
+            on_call_now(&wokesy.pagerduty)
         )
     );
     assert_eq!(
@@ -503,8 +536,8 @@ async fn every_job_starts_while_zulip_does_not_answer_the_post_about_the_start()
         .mention(ALICE, SYSADMIN, "incident", "who is on call");
     let answer = wokesy.zulip.posts_in(incident_topic()).next().await;
     assert!(start.markdown.starts_with(":rocket: wokesy v"), "{start:?}");
-    assert_eq!(announced, ON_CALL_NOW);
-    assert_eq!(answer, ON_CALL_NOW);
+    assert_eq!(announced, on_call_now(&wokesy.pagerduty));
+    assert_eq!(answer, on_call_now(&wokesy.pagerduty));
     assert_eq!(wokesy.probe("/livez").await, StatusCode::OK);
 }
 

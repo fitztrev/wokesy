@@ -1,15 +1,21 @@
+use time::OffsetDateTime;
+
 use super::changes::Change;
-use super::roster::{Roster, Shift};
-use crate::chat::{ChatUserId, silenced, time_tag};
+use super::roster::{Policy, Roster, Shift};
+use crate::chat::{ChatUserId, in_one_unit, silenced, time_tag};
 use crate::pagerduty::{EscalationLevel, EscalationPolicyName, ScheduleName, UserRef};
 use crate::people::{Directory, Name};
 
-const ON_CALL_NOW: &str = ":pager: **On call now**";
-const ON_CALL_CHANGED: &str = ":pager: **On call changed**";
-const NO_POLICY_IN_USE: &str = "No escalation policy is used by a service, so nobody is on call.";
-const NOBODY_ON_CALL: &str = ":warning: nobody";
+const ON_CALL_NOW: &str = ":pager: **On call now:**";
+const ON_CALL_CHANGED: &str = ":pager: **On call changed:**";
+const NO_POLICY_IN_USE: &str =
+    ":pager: **On call now**\nNo escalation policy is used by a service, so nobody is on call.";
+const NOBODY_TO_ALERT: &str = ":warning: nobody";
 const NOBODY: &str = "nobody";
+const SCHEDULE: &str = "schedule";
+const CHANGES: &str = "changes";
 const BETWEEN_PEOPLE: &str = ", ";
+const BETWEEN_LEVELS: &str = "\n\n";
 
 /// ```
 /// use wokesy::on_call::policy_in_chat;
@@ -53,11 +59,37 @@ pub fn name_in_chat(name: &Name) -> String {
     silenced(name)
 }
 
+/// ```
+/// use wokesy::on_call::person_in_chat;
+/// use wokesy::pagerduty::{User, UserId, UserRef};
+/// use wokesy::people::{Directory, Email, Links, Name};
+///
+/// let user = |id: &str, name: &str| User {
+///     id: UserId::try_new(id).unwrap(),
+///     name: Name::try_new(name).unwrap(),
+///     email: Email::try_new(format!("{id}@example.com")).unwrap(),
+/// };
+/// let on_call = |user: &User| UserRef { id: user.id.clone(), name: user.name.clone() };
+/// let (alice, everyone) = (user("PALICE1", "Alice Example"), user("PEVERY1", "@**all**"));
+/// let links: Links = "PALICE1@example.com=12".parse().unwrap();
+/// let directory = Directory::matching(&[alice.clone(), everyone.clone()], &[], &links);
+///
+/// assert_eq!(person_in_chat(&on_call(&alice), &directory), "@_**|12**");
+/// assert_eq!(person_in_chat(&on_call(&everyone), &directory), "@_**all**");
+/// ```
+#[must_use]
+pub fn person_in_chat(user: &UserRef, directory: &Directory) -> String {
+    directory
+        .chat_user_of(&user.id)
+        .map_or_else(|| name_in_chat(&user.name), ChatUserId::silent_mention)
+}
+
 fn bold(name: &str) -> String {
     format!("**{}**", silenced(name))
 }
 
 /// ```
+/// use time::OffsetDateTime;
 /// use wokesy::on_call::{ChosenPolicies, Roster, on_call_now};
 /// use wokesy::people::{Directory, Links};
 ///
@@ -65,75 +97,120 @@ fn bold(name: &str) -> String {
 /// let directory = Directory::matching(&[], &[], &Links::default());
 ///
 /// assert_eq!(
-///     on_call_now(&nobody_to_call, &directory),
+///     on_call_now(&nobody_to_call, &directory, OffsetDateTime::now_utc()),
 ///     ":pager: **On call now**\nNo escalation policy is used by a service, so nobody is on call."
 /// );
 /// ```
 #[must_use]
-pub fn on_call_now(roster: &Roster, directory: &Directory) -> String {
+pub fn on_call_now(roster: &Roster, directory: &Directory, now: OffsetDateTime) -> String {
     if roster.policies.is_empty() {
-        return under(ON_CALL_NOW, [NO_POLICY_IN_USE.to_owned()]);
+        return NO_POLICY_IN_USE.to_owned();
     }
     let levels = roster.policies.iter().flat_map(|policy| {
         policy.levels.iter().map(|level| {
-            line(
+            under_its_heading(
                 &policy.name,
                 level.number,
-                &on_call(&level.shifts, directory),
+                on_call(&level.shifts, directory),
             )
         })
     });
-    under(ON_CALL_NOW, levels)
+    format!(
+        "{ON_CALL_NOW} {}\n\n{}",
+        alerted_first(roster, directory, now),
+        hidden_under(SCHEDULE, levels)
+    )
 }
 
-pub fn on_call_changed(changes: &[Change<'_>], directory: &Directory) -> String {
+pub fn on_call_changed(
+    changes: &[Change<'_>],
+    latest: &Roster,
+    directory: &Directory,
+    now: OffsetDateTime,
+) -> String {
     let levels = changes.iter().map(|change| {
-        let now = on_call(change.on_call, directory);
-        let was = previously_on_call(change.was_on_call, directory);
-        line(change.policy, change.level, &format!("{now} (was {was})"))
+        let was = format!("was: {}", previously_on_call(change.was_on_call, directory));
+        let lines = on_call(change.on_call, directory)
+            .into_iter()
+            .chain(std::iter::once(was));
+        under_its_heading(change.policy, change.level, lines)
     });
-    under(ON_CALL_CHANGED, levels)
+    format!(
+        "{ON_CALL_CHANGED} {}\n\n{}",
+        alerted_first(latest, directory, now),
+        hidden_under(CHANGES, levels)
+    )
 }
 
-fn under(heading: &str, lines: impl IntoIterator<Item = String>) -> String {
-    std::iter::once(heading.to_owned())
-        .chain(lines)
+fn alerted_first(roster: &Roster, directory: &Directory, now: OffsetDateTime) -> String {
+    let mut alerted: Vec<&Shift> = Vec::new();
+    let first_lines = roster.policies.iter().filter_map(Policy::alerted_first);
+    for shift in first_lines.flat_map(|level| &level.shifts) {
+        if alerted.iter().all(|listed| listed.user.id != shift.user.id) {
+            alerted.push(shift);
+        }
+    }
+    if alerted.is_empty() {
+        return NOBODY_TO_ALERT.to_owned();
+    }
+    alerted
+        .into_iter()
+        .map(|shift| {
+            let person = person_in_chat(&shift.user, directory);
+            match shift.ends {
+                Some(ends) => {
+                    let left = (ends - now).try_into().unwrap_or_default();
+                    format!("{person} for {}", in_one_unit(left))
+                }
+                None => person,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(BETWEEN_PEOPLE)
+}
+
+fn hidden_under(header: &str, levels: impl IntoIterator<Item = String>) -> String {
+    let levels = levels.into_iter().collect::<Vec<_>>().join(BETWEEN_LEVELS);
+    format!("```spoiler {header}\n{levels}\n```")
+}
+
+fn under_its_heading(
+    policy: &EscalationPolicyName,
+    level: EscalationLevel,
+    lines: impl IntoIterator<Item = String>,
+) -> String {
+    let heading = bold(&format!("{} · Level {level}", policy.as_str()));
+    std::iter::once(heading)
+        .chain(lines.into_iter().map(|line| format!("- {line}")))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn line(policy: &EscalationPolicyName, level: EscalationLevel, on_call: &str) -> String {
-    format!("- {}, level {level}: {on_call}", policy_in_chat(policy))
-}
-
-fn on_call(shifts: &[Shift], directory: &Directory) -> String {
+fn on_call(shifts: &[Shift], directory: &Directory) -> Vec<String> {
     if shifts.is_empty() {
-        return NOBODY_ON_CALL.to_owned();
+        return vec![NOBODY.to_owned()];
     }
-    listed(shifts.iter().map(|shift| {
-        let person = person(&shift.user, directory);
-        match shift.ends {
-            Some(ends) => format!("{person} until {}", time_tag(ends)),
-            None => person,
-        }
-    }))
+    shifts
+        .iter()
+        .map(|shift| {
+            let person = person_in_chat(&shift.user, directory);
+            match shift.ends {
+                Some(ends) => format!("{person} until {}", time_tag(ends)),
+                None => person,
+            }
+        })
+        .collect()
 }
 
 fn previously_on_call(shifts: &[Shift], directory: &Directory) -> String {
     if shifts.is_empty() {
         return NOBODY.to_owned();
     }
-    listed(shifts.iter().map(|shift| person(&shift.user, directory)))
-}
-
-fn listed(people: impl Iterator<Item = String>) -> String {
-    people.collect::<Vec<_>>().join(BETWEEN_PEOPLE)
-}
-
-fn person(user: &UserRef, directory: &Directory) -> String {
-    directory
-        .chat_user_of(&user.id)
-        .map_or_else(|| name_in_chat(&user.name), ChatUserId::silent_mention)
+    shifts
+        .iter()
+        .map(|shift| person_in_chat(&shift.user, directory))
+        .collect::<Vec<_>>()
+        .join(BETWEEN_PEOPLE)
 }
 
 #[cfg(test)]

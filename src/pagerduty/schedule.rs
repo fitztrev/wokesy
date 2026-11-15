@@ -46,3 +46,20 @@ pub struct ScheduleRef {
     )
 )]
 pub struct OverrideId(String);
+
+#[nutype(
+    validate(not_empty),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Deref,
+        Display,
+        Deserialize
+    )
+)]
+pub struct CustomShiftId(String);

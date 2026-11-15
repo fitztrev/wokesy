@@ -1,16 +1,15 @@
-use std::time::Duration;
-
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use time::{OffsetDateTime, UtcOffset};
+use time::OffsetDateTime;
 
 use crate::pagerduty::{OverrideId, ScheduleId, UserId};
 
-use super::{Api, ApiError, Reference, done, read};
+use super::{
+    Api, ApiError, LONGEST_WAIT_FOR_A_CHANGE, Reference, done, read, whole_seconds_in_utc,
+};
 
 const SCHEDULES: &str = "schedules";
 const OVERRIDES: &str = "overrides";
-const LONGEST_WAIT_FOR_AN_OVERRIDE: Duration = Duration::from_secs(10);
 
 #[derive(Serialize)]
 struct NewOverride<'a> {
@@ -95,7 +94,7 @@ impl Api {
         };
         let request = self
             .request(Method::POST, &[SCHEDULES, schedule, OVERRIDES])
-            .timeout(LONGEST_WAIT_FOR_AN_OVERRIDE)
+            .timeout(LONGEST_WAIT_FOR_A_CHANGE)
             .json(&new);
         let Created(id) = read(request).await?;
         Ok(id)
@@ -108,11 +107,7 @@ impl Api {
     ) -> Result<(), ApiError> {
         let request = self
             .request(Method::DELETE, &[SCHEDULES, schedule, OVERRIDES, id])
-            .timeout(LONGEST_WAIT_FOR_AN_OVERRIDE);
+            .timeout(LONGEST_WAIT_FOR_A_CHANGE);
         done(request).await
     }
-}
-
-const fn whole_seconds_in_utc(at: OffsetDateTime) -> OffsetDateTime {
-    at.to_offset(UtcOffset::UTC).truncate_to_second()
 }

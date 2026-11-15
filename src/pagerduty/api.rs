@@ -1,4 +1,5 @@
 mod abilities;
+mod custom_shifts;
 mod escalation_policies;
 mod oncalls;
 mod schedules;
@@ -11,11 +12,13 @@ use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, IgnoredAny};
+use time::{OffsetDateTime, UtcOffset};
 use url::Url;
 
 use super::Config;
 
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const LONGEST_WAIT_FOR_A_CHANGE: Duration = Duration::from_secs(10);
 const VERSION_2: &str = "application/vnd.pagerduty+json;version=2";
 const PAGE_SIZE: usize = 100;
 const SHIFT_BASED_SCHEDULE: u32 = 3005;
@@ -220,6 +223,10 @@ async fn read<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, ApiErro
     let status = response.status();
     let body = response.bytes().await?;
     serde_json::from_slice(&body).map_err(|cause| ApiError::Unreadable { status, cause })
+}
+
+const fn whole_seconds_in_utc(at: OffsetDateTime) -> OffsetDateTime {
+    at.to_offset(UtcOffset::UTC).truncate_to_second()
 }
 
 #[cfg(test)]

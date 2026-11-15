@@ -9,8 +9,9 @@ use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
 
 use super::*;
 use crate::pagerduty::{
-    EscalationLevel, EscalationPolicy, EscalationPolicyId, EscalationPolicyName, EscalationRule,
-    OnCall, OverrideId, ScheduleId, ScheduleName, ScheduleRef, Target, User, UserId, UserRef,
+    CustomShiftId, EscalationLevel, EscalationPolicy, EscalationPolicyId, EscalationPolicyName,
+    EscalationRule, OnCall, OverrideId, ScheduleId, ScheduleName, ScheduleRef, Target, User,
+    UserId, UserRef,
 };
 use crate::people::{Email, Name};
 use crate::testing::Logs;
@@ -72,6 +73,10 @@ fn override_id(id: &str) -> OverrideId {
     OverrideId::try_new(id).unwrap()
 }
 
+fn custom_shift_id(id: &str) -> CustomShiftId {
+    CustomShiftId::try_new(id).unwrap()
+}
+
 fn user(id: &str, name: &str) -> UserRef {
     UserRef {
         id: user_id(id),
@@ -112,9 +117,10 @@ async fn every_request_carries_the_token_and_asks_for_version_2() {
             "escalation_policies": [],
             "oncalls": [],
             "override": { "id": "PQ47DCP" },
+            "custom_shifts": [{ "id": "PCS47DC" }],
             "more": false,
         })))
-        .expect(6);
+        .expect(8);
     let (_server, api) = pagerduty_answering(request).await;
     let rota = schedule_id("PI7DH85");
     let start = datetime!(2026-11-14 20:00 UTC);
@@ -128,6 +134,12 @@ async fn every_request_carries_the_token_and_asks_for_version_2() {
         .await
         .unwrap();
     api.delete_schedule_override(&rota, &override_id("PQ47DCP"))
+        .await
+        .unwrap();
+    api.create_custom_shift(&rota, &user_id("PEYSGVF"), start, end)
+        .await
+        .unwrap();
+    api.delete_custom_shift(&rota, &custom_shift_id("PCS47DC"))
         .await
         .unwrap();
 }
@@ -619,6 +631,122 @@ async fn an_override_is_deleted_by_its_id_and_both_204_and_200_are_success() {
             .await
             .unwrap();
     }
+}
+
+fn create_custom_shift() -> MockBuilder {
+    Mock::given(method("POST")).and(path("/v3/schedules/PWEZ877/custom_shifts"))
+}
+
+async fn created_custom_shift(api: &Api) -> Result<CustomShiftId, ApiError> {
+    api.create_custom_shift(
+        &schedule_id("PWEZ877"),
+        &user_id("PEYSGVF"),
+        datetime!(2026-11-14 21:00:00.25 +1),
+        datetime!(2026-11-15 01:00:00.25 +1),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_custom_shift_is_created_for_a_user_between_two_times_in_utc_and_its_id_is_read() {
+    let request = create_custom_shift()
+        .and(header(CONTENT_TYPE, "application/json"))
+        .and(body_json(json!({
+            "custom_shifts": [{
+                "type": "custom_shift",
+                "start_time": "2026-11-14T20:00:00Z",
+                "end_time": "2026-11-15T00:00:00Z",
+                "assignments": [{
+                    "type": "shift_assignment",
+                    "member": { "type": "user_member", "user_id": "PEYSGVF" },
+                }],
+            }],
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "custom_shifts": [{
+                "id": "PCS47DC",
+                "type": "custom_shift",
+                "start_time": "2026-11-14T20:00:00Z",
+                "end_time": "2026-11-15T00:00:00Z",
+                "assignments": [{
+                    "id": "PAS47DC",
+                    "type": "shift_assignment",
+                    "member": { "type": "user_member", "user_id": "PEYSGVF" },
+                }],
+                "self": "https://api.pagerduty.com/v3/schedules/PWEZ877/custom_shifts/PCS47DC",
+                "html_url": "https://subdomain.pagerduty.com/schedules/PWEZ877",
+            }],
+        })))
+        .expect(1);
+    let (_server, api) = pagerduty_answering(request).await;
+
+    assert_eq!(
+        created_custom_shift(&api).await.unwrap(),
+        custom_shift_id("PCS47DC")
+    );
+}
+
+#[tokio::test]
+async fn a_created_custom_shift_whose_answer_carries_no_id_is_unreadable() {
+    for answer in [
+        json!({ "custom_shifts": [] }),
+        json!({ "custom_shifts": [{ "type": "custom_shift" }] }),
+        json!({ "custom_shift": { "id": "PCS47DC" } }),
+    ] {
+        let request =
+            create_custom_shift().respond_with(ResponseTemplate::new(201).set_body_json(&answer));
+        let (_server, api) = pagerduty_answering(request).await;
+
+        assert!(
+            matches!(
+                created_custom_shift(&api).await,
+                Err(ApiError::Unreadable {
+                    status: StatusCode::CREATED,
+                    ..
+                })
+            ),
+            "{answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_custom_shift_is_deleted_by_its_id() {
+    let request = Mock::given(method("DELETE"))
+        .and(path("/v3/schedules/PWEZ877/custom_shifts/PCS47DC"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1);
+    let (_server, api) = pagerduty_answering(request).await;
+
+    api.delete_custom_shift(&schedule_id("PWEZ877"), &custom_shift_id("PCS47DC"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_custom_shift_that_pagerduty_does_not_answer_is_given_up_after_ten_seconds() {
+    let api = api_at(&a_server_that_never_answers().await);
+    let ten_seconds = Duration::from_secs(10)..Duration::from_secs(11);
+
+    let asked = Instant::now();
+    let created = created_custom_shift(&api).await;
+    let waited_to_create = asked.elapsed();
+    let asked = Instant::now();
+    let deleted = api
+        .delete_custom_shift(&schedule_id("PWEZ877"), &custom_shift_id("PCS47DC"))
+        .await;
+    let waited_to_delete = asked.elapsed();
+
+    assert!(gave_up_waiting(&created), "{created:?}");
+    assert!(gave_up_waiting(&deleted), "{deleted:?}");
+    assert!(
+        ten_seconds.contains(&waited_to_create),
+        "{waited_to_create:?}"
+    );
+    assert!(
+        ten_seconds.contains(&waited_to_delete),
+        "{waited_to_delete:?}"
+    );
 }
 
 #[tokio::test]

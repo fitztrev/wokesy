@@ -85,6 +85,14 @@ struct FakeZulip {
 
 impl FakeZulip {
     async fn start() -> (Self, mpsc::Receiver<IncomingMessage>) {
+        let inbox = InboxConfig {
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(50),
+        };
+        Self::start_with(inbox).await
+    }
+
+    async fn start_with(inbox: InboxConfig) -> (Self, mpsc::Receiver<IncomingMessage>) {
         let (replies, replies_out) = mpsc::unbounded_channel();
         let (registrations_in, registrations) = mpsc::unbounded_channel();
         let (polls_in, polls) = mpsc::unbounded_channel();
@@ -106,10 +114,7 @@ impl FakeZulip {
             site: format!("http://{address}").parse().unwrap(),
             email: BotEmail::try_new("wokesy-bot@zulip.example.com").unwrap(),
             api_key: SecretString::from("key"),
-            inbox: InboxConfig {
-                initial_backoff: Duration::from_millis(10),
-                max_backoff: Duration::from_millis(50),
-            },
+            inbox,
         };
         let api = Api::new(reqwest::Client::new(), &config);
         let (incoming, received) = mpsc::channel(16);
@@ -125,6 +130,18 @@ impl FakeZulip {
 
     fn reply(&self, status: StatusCode, body: Value) {
         self.replies.send((status, body)).unwrap();
+    }
+
+    fn expire(&self, queue: &str) {
+        self.reply(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "result": "error",
+                "code": "BAD_EVENT_QUEUE_ID",
+                "msg": format!("Bad event queue ID: {queue}"),
+                "queue_id": queue,
+            }),
+        );
     }
 
     fn deliver(&self, events: Value) {
@@ -382,15 +399,55 @@ async fn an_expired_queue_is_registered_again() {
     let (mut zulip, mut received) = FakeZulip::start().await;
     assert_eq!(zulip.next_poll().await, first_poll_of("queue-1"));
 
-    zulip.reply(
-        StatusCode::BAD_REQUEST,
-        json!({
-            "result": "error",
-            "code": "BAD_EVENT_QUEUE_ID",
-            "msg": "Bad event queue ID: queue-1",
-            "queue_id": "queue-1",
-        }),
+    zulip.expire("queue-1");
+    let after_expiry = zulip.next_poll().await;
+    zulip.deliver(json!([direct_message(1, ALICE, "help")]));
+
+    assert_eq!(after_expiry, first_poll_of("queue-2"));
+    assert_eq!(within_a_while(received.recv()).await.text.as_str(), "help");
+}
+
+#[tokio::test]
+async fn a_queue_zulip_rejects_before_it_delivered_anything_is_registered_again_after_a_longer_wait_each_time()
+ {
+    let first_wait = Duration::from_millis(60);
+    let (mut zulip, _received) = FakeZulip::start_with(InboxConfig {
+        initial_backoff: first_wait,
+        max_backoff: Duration::from_secs(1),
+    })
+    .await;
+    assert_eq!(zulip.next_poll().await, first_poll_of("queue-1"));
+
+    let rejected = std::time::Instant::now();
+    zulip.expire("queue-1");
+    let after_one = zulip.next_poll().await;
+    let waited_once = rejected.elapsed();
+    let rejected = std::time::Instant::now();
+    zulip.expire("queue-2");
+    let after_two = zulip.next_poll().await;
+    let waited_twice = rejected.elapsed();
+
+    assert_eq!(after_one, first_poll_of("queue-2"));
+    assert_eq!(after_two, first_poll_of("queue-3"));
+    assert!(waited_once >= first_wait, "{waited_once:?}");
+    assert!(waited_twice >= first_wait * 2, "{waited_twice:?}");
+}
+
+#[tokio::test]
+async fn a_queue_that_expires_after_it_delivered_is_registered_again_without_a_wait() {
+    let (mut zulip, mut received) = FakeZulip::start_with(InboxConfig {
+        initial_backoff: Duration::from_hours(1),
+        max_backoff: Duration::from_hours(1),
+    })
+    .await;
+    assert_eq!(zulip.next_poll().await, first_poll_of("queue-1"));
+    zulip.deliver(json!([{ "id": 0, "type": "heartbeat" }]));
+    assert_eq!(
+        zulip.next_poll().await,
+        ("queue-1".to_owned(), "0".to_owned())
     );
+
+    zulip.expire("queue-1");
     let after_expiry = zulip.next_poll().await;
     zulip.deliver(json!([direct_message(1, ALICE, "help")]));
 

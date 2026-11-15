@@ -61,10 +61,12 @@ async fn read(api: &Api, config: &InboxConfig, incoming: &mpsc::Sender<IncomingM
             }
         };
         tracing::info!(queue_id = %queue.id, "zulip event queue registered");
+        let mut delivered = false;
         loop {
             match api.events(&queue).await {
                 Ok(batch) => {
                     retry.reset();
+                    delivered = true;
                     queue.acknowledge(&batch);
                     for delivery in batch.deliveries {
                         if let Some(message) = addressed(&bot, delivery)
@@ -74,8 +76,12 @@ async fn read(api: &Api, config: &InboxConfig, incoming: &mpsc::Sender<IncomingM
                         }
                     }
                 }
-                Err(ApiError::BadEventQueue) => {
-                    tracing::info!(queue_id = %queue.id, "zulip event queue expired");
+                Err(error @ ApiError::BadEventQueue) => {
+                    if delivered {
+                        tracing::info!(queue_id = %queue.id, "zulip event queue expired");
+                    } else {
+                        retry.wait(&error, "reading a new event queue").await;
+                    }
                     break;
                 }
                 Err(error) => retry.wait(&error, "reading events").await,

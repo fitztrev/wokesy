@@ -227,7 +227,7 @@ impl Api {
         };
         for event in events {
             let Ok(numbered) = Numbered::deserialize(&event) else {
-                tracing::warn!(%event, "zulip event without an id or type ignored");
+                tracing::warn!("zulip event without an id or type ignored");
                 continue;
             };
             batch.last_event_id = batch.last_event_id.max(Some(numbered.id));

@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use super::*;
 use crate::chat::{ChannelName, ChatUserId, MessageId, TopicName};
 use crate::people::Name;
+use crate::testing::Logs;
 use crate::zulip::{BotEmail, Config};
 
 const BOT: u64 = 99;
@@ -392,6 +393,38 @@ async fn each_poll_acknowledges_the_last_event_it_saw() {
     assert_eq!(after_heartbeat, ("queue-1".to_owned(), "3".to_owned()));
     assert_eq!(after_messages, ("queue-1".to_owned(), "5".to_owned()));
     assert_eq!(within_a_while(received.recv()).await.text.as_str(), "help");
+}
+
+#[tokio::test]
+async fn an_event_without_an_id_is_ignored_and_logged_without_what_it_holds() {
+    let (logs, _listening) = Logs::listen();
+    let (zulip, mut received) = FakeZulip::start().await;
+    let mut without_an_id = channel_message(
+        1,
+        ALICE,
+        "@**Wokesy** the launch code is 0000",
+        &["mentioned"],
+    );
+    without_an_id.as_object_mut().unwrap().remove("id");
+    without_an_id["message"]["sender_email"] = json!("alice@example.com");
+
+    zulip.deliver(json!([without_an_id, direct_message(2, ALICE, "help")]));
+
+    assert_eq!(within_a_while(received.recv()).await.text.as_str(), "help");
+    assert!(received.try_recv().is_err());
+    let logged = logs.text();
+    assert!(
+        logged.contains("zulip event without an id or type ignored"),
+        "{logged}"
+    );
+    for secret in [
+        "launch code",
+        "alice@example.com",
+        "Alice Example",
+        "sysadmin",
+    ] {
+        assert!(!logged.contains(secret), "{secret} is in {logged}");
+    }
 }
 
 #[tokio::test]

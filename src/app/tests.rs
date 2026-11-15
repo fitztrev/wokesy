@@ -8,6 +8,7 @@ use secrecy::SecretString;
 use serde_json::json;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -18,6 +19,9 @@ use fake_zulip::{ALICE, BOB, FakeZulip, SAM};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const LONGER_THAN_A_TEST: Duration = Duration::from_hours(1);
+const A_MOMENT: Duration = Duration::from_millis(250);
+const KUBERNETES_GRACE_PERIOD: Duration = Duration::from_secs(30);
+const LONGEST_TELEMETRY_SHUTDOWN: Duration = Duration::from_secs(10);
 const ROUTING_KEY: &str = "samplekeyhere";
 const SYSADMIN: &str = "sysadmin";
 const STATUS: &str = "wokesy status";
@@ -102,8 +106,11 @@ fn settings(pagerduty: &FakePagerDuty, zulip: &FakeZulip) -> Config {
 
 impl Wokesy {
     async fn start() -> Self {
+        Self::start_on(FakeZulip::start().await, LONGEST_WAITS).await
+    }
+
+    async fn start_on(zulip: FakeZulip, longest_waits: LongestWaits) -> Self {
         let pagerduty = FakePagerDuty::start().await;
-        let zulip = FakeZulip::start().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let probes = listener.local_addr().unwrap();
         let (shutdown, requested) = oneshot::channel();
@@ -111,6 +118,7 @@ impl Wokesy {
             settings(&pagerduty, &zulip),
             listener,
             async move { requested.await.unwrap_or(Signal::Interrupt) },
+            longest_waits,
         ));
         Self {
             pagerduty,
@@ -122,7 +130,11 @@ impl Wokesy {
     }
 
     async fn settled() -> Self {
-        let wokesy = Self::start().await;
+        Self::settled_waiting_at_most(LONGEST_WAITS).await
+    }
+
+    async fn settled_waiting_at_most(longest_waits: LongestWaits) -> Self {
+        let wokesy = Self::start_on(FakeZulip::start().await, longest_waits).await;
         let mut status = wokesy.zulip.posts_in_channel(STATUS);
         wokesy.zulip.posts_in(on_call_topic()).next().await;
         status.next().await;
@@ -385,6 +397,97 @@ async fn shutdown_stops_reading_first_and_finishes_the_command_in_hand_before_it
         goodbye.starts_with(":octagonal_sign: Shutting down (SIGTERM) after "),
         "{goodbye}"
     );
+}
+
+#[tokio::test]
+async fn every_job_starts_while_zulip_does_not_answer_the_post_about_the_start() {
+    let zulip = FakeZulip::start().await;
+    zulip.never_answers_posts_in(STATUS);
+
+    let wokesy = Wokesy::start_on(zulip, LONGEST_WAITS).await;
+
+    let start = wokesy.zulip.was_sent_a_post_it_never_answered().await;
+    let announced = wokesy.zulip.posts_in(on_call_topic()).next().await;
+    wokesy
+        .zulip
+        .mention(ALICE, SYSADMIN, "incident", "who is on call");
+    let answer = wokesy.zulip.posts_in(incident_topic()).next().await;
+    assert!(start.markdown.starts_with(":rocket: wokesy v"), "{start:?}");
+    assert_eq!(announced, ON_CALL_NOW);
+    assert_eq!(answer, ON_CALL_NOW);
+    assert_eq!(wokesy.probe("/livez").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_post_about_the_start_is_given_up_after_its_longest_wait_and_the_status_is_followed() {
+    let zulip = FakeZulip::start().await;
+    zulip.never_answers_posts_in(STATUS);
+    let longest_waits = LongestWaits {
+        status_post: A_MOMENT,
+        ..LONGEST_WAITS
+    };
+
+    let wokesy = Wokesy::start_on(zulip, longest_waits).await;
+
+    let mut unanswered = wokesy.zulip.posts_it_never_answered();
+    assert!(unanswered.next().await.starts_with(":rocket: wokesy v"));
+    assert_eq!(unanswered.next().await, ":check: PagerDuty works");
+}
+
+#[tokio::test]
+async fn a_shutdown_post_zulip_does_not_answer_is_given_up_after_its_longest_wait() {
+    let longest_waits = LongestWaits {
+        status_post: A_MOMENT,
+        ..LONGEST_WAITS
+    };
+    let wokesy = Wokesy::settled_waiting_at_most(longest_waits).await;
+    wokesy.zulip.never_answers_posts_in(STATUS);
+
+    let (_pagerduty, zulip, outcome) = wokesy.shut_down().await;
+
+    let goodbye = zulip.was_sent_a_post_it_never_answered().await;
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(
+        goodbye
+            .markdown
+            .starts_with(":octagonal_sign: Shutting down (SIGTERM) after "),
+        "{goodbye:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_connection_left_open_mid_request_is_given_up_after_the_longest_wait_for_the_http_server()
+ {
+    let longest_waits = LongestWaits {
+        http_server: A_MOMENT,
+        ..LONGEST_WAITS
+    };
+    let wokesy = Wokesy::settled_waiting_at_most(longest_waits).await;
+    let mid_request = TcpStream::connect(wokesy.probes).await.unwrap();
+    mid_request.writable().await.unwrap();
+    mid_request.try_write(b"GET /livez HTTP/1.1\r\n").unwrap();
+    assert_eq!(wokesy.probe("/livez").await, StatusCode::OK);
+
+    let (_pagerduty, zulip, outcome) = wokesy.shut_down().await;
+
+    let last = zulip.posted().pop().unwrap();
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(
+        last.markdown.starts_with(":octagonal_sign: Shutting down"),
+        "{last:?}"
+    );
+    drop(mid_request);
+}
+
+#[test]
+fn the_longest_waits_of_a_shutdown_and_of_telemetry_fit_in_the_grace_period_kubernetes_gives() {
+    let longest_shutdown = LONGEST_WAITS.command_in_hand
+        + LONGEST_WAITS.status_post
+        + LONGEST_WAITS.http_server
+        + LONGEST_TELEMETRY_SHUTDOWN;
+
+    assert_eq!(longest_shutdown, Duration::from_secs(27));
+    assert!(longest_shutdown < KUBERNETES_GRACE_PERIOD);
 }
 
 #[tokio::test]

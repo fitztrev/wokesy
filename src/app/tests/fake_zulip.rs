@@ -35,6 +35,8 @@ struct Organization {
     posted: watch::Sender<Vec<Posted>>,
     arriving: Arc<Mutex<mpsc::UnboundedReceiver<Value>>>,
     waiting_for_events: watch::Sender<usize>,
+    channels_never_answered: watch::Sender<Vec<String>>,
+    never_answered: watch::Sender<Vec<Posted>>,
 }
 
 pub struct FakeZulip {
@@ -73,6 +75,8 @@ impl FakeZulip {
             posted: watch::Sender::new(Vec::new()),
             arriving: Arc::new(Mutex::new(arriving)),
             waiting_for_events: watch::Sender::new(0),
+            channels_never_answered: watch::Sender::new(Vec::new()),
+            never_answered: watch::Sender::new(Vec::new()),
         };
         let router = Router::new()
             .route("/api/v1/users/me", get(own_user))
@@ -113,6 +117,14 @@ impl FakeZulip {
         self.posts_where(
             move |to| matches!(to, Conversation::Topic { channel, .. } if channel.as_str() == name),
         )
+    }
+
+    pub fn posts_it_never_answered(&self) -> Posts {
+        Posts {
+            posted: self.organization.never_answered.subscribe(),
+            wanted: Box::new(|_| true),
+            read: 0,
+        }
     }
 
     fn posts_where(&self, wanted: impl Fn(&Conversation) -> bool + Send + Sync + 'static) -> Posts {
@@ -159,6 +171,21 @@ impl FakeZulip {
         self.arrives
             .send(json!({ "id": id, "type": "message", "flags": flags, "message": message }))
             .unwrap();
+    }
+
+    pub fn never_answers_posts_in(&self, channel: &str) {
+        self.organization
+            .channels_never_answered
+            .send_modify(|channels| channels.push(channel.to_owned()));
+    }
+
+    pub async fn was_sent_a_post_it_never_answered(&self) -> Posted {
+        let mut never_answered = self.organization.never_answered.subscribe();
+        let all = tokio::time::timeout(PATIENCE, never_answered.wait_for(|all| !all.is_empty()))
+            .await
+            .unwrap()
+            .unwrap();
+        all[0].clone()
     }
 
     pub async fn waits_for_messages(&self) {
@@ -296,12 +323,24 @@ async fn send_message(
             topic: TopicName::try_new(message["topic"].as_str()).unwrap(),
         },
     };
+    let post = Posted {
+        to,
+        markdown: message["content"].clone(),
+    };
+    let never_answered = matches!(
+        &post.to,
+        Conversation::Topic { channel, .. }
+            if organization.channels_never_answered.borrow().iter().any(|name| name == channel.as_str())
+    );
+    if never_answered {
+        organization
+            .never_answered
+            .send_modify(|all| all.push(post));
+        return std::future::pending().await;
+    }
     let mut id = 0;
     organization.posted.send_modify(|posted| {
-        posted.push(Posted {
-            to,
-            markdown: message["content"].clone(),
-        });
+        posted.push(post);
         id = posted.len();
     });
     success(json!({ "id": id }))

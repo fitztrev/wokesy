@@ -34,8 +34,21 @@ const ON_CALL_ANNOUNCEMENTS: &str = "on-call announcements";
 const ZULIP_INBOX: &str = "zulip inbox";
 const COMMANDS: &str = "commands";
 const HTTP_SERVER: &str = "http server";
+const START_POST: &str = "posting the start";
+const SHUTDOWN_POST: &str = "posting the shutdown";
 const COMMANDS_WAITING_AT_MOST: usize = 16;
-const LONGEST_WAIT_FOR_THE_COMMAND_IN_HAND: Duration = Duration::from_secs(10);
+const LONGEST_WAITS: LongestWaits = LongestWaits {
+    command_in_hand: Duration::from_secs(10),
+    status_post: Duration::from_secs(5),
+    http_server: Duration::from_secs(2),
+};
+
+#[derive(Clone, Copy, Debug)]
+struct LongestWaits {
+    command_in_hand: Duration,
+    status_post: Duration,
+    http_server: Duration,
+}
 
 pub fn http_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder().user_agent(USER_AGENT).build()
@@ -43,13 +56,14 @@ pub fn http_client() -> reqwest::Result<reqwest::Client> {
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let listener = http::bind(&config.http).await?;
-    run_until(config, listener, shutdown_requested()).await
+    run_until(config, listener, shutdown_requested(), LONGEST_WAITS).await
 }
 
 async fn run_until(
     config: Config,
     listener: TcpListener,
     shutdown: impl Future<Output = Signal>,
+    longest_waits: LongestWaits,
 ) -> anyhow::Result<()> {
     let http = http_client()?;
     let messenger = ZulipMessenger::new(http.clone(), &config.zulip);
@@ -57,7 +71,6 @@ async fn run_until(
     let (health, checked) = watch::channel(None);
 
     let mut probes = Probes::serve(listener, checked.clone());
-    status.started().await;
     let mut jobs = Jobs::start(&config, &http, messenger, health);
 
     let down: anyhow::Result<Signal> = tokio::select! {
@@ -65,12 +78,35 @@ async fn run_until(
         signal = shutdown => Ok(signal),
         error = jobs.stopped() => Err(error),
         error = probes.stopped() => Err(error),
-        () = status.follow(checked) => Err(stopped_unexpectedly(HEALTH_CHECK)),
+        () = report(&mut status, checked, longest_waits.status_post) => {
+            Err(stopped_unexpectedly(HEALTH_CHECK))
+        }
     };
 
-    jobs.stop().await;
-    status.stopping(shutdown_after(&down)).await;
-    exit_with(down, probes.stop().await)
+    jobs.stop(longest_waits.command_in_hand).await;
+    let stopping = status.stopping(shutdown_after(&down));
+    within(longest_waits.status_post, SHUTDOWN_POST, stopping).await;
+    exit_with(down, probes.stop(longest_waits.http_server).await)
+}
+
+async fn report(
+    status: &mut Status<ZulipMessenger>,
+    health: watch::Receiver<Option<Health>>,
+    longest_wait_for_the_start_post: Duration,
+) {
+    within(
+        longest_wait_for_the_start_post,
+        START_POST,
+        status.started(),
+    )
+    .await;
+    status.follow(health).await;
+}
+
+async fn within(longest_wait: Duration, doing: &'static str, done: impl Future<Output = ()>) {
+    if tokio::time::timeout(longest_wait, done).await.is_err() {
+        tracing::warn!(?longest_wait, doing, "gave up waiting");
+    }
 }
 
 fn shutdown_after(down: &anyhow::Result<Signal>) -> Shutdown {
@@ -162,9 +198,10 @@ impl Jobs {
         }
     }
 
-    async fn stop(&mut self) {
+    async fn stop(&mut self, longest_wait_command_in_hand: Duration) {
         self.inbox.abort();
-        self.finish_the_command_in_hand().await;
+        self.finish_the_command_in_hand(longest_wait_command_in_hand)
+            .await;
         self.answering.abort();
         self.announcing.abort();
         self.sync.abort();
@@ -172,11 +209,10 @@ impl Jobs {
         self.health.abort();
     }
 
-    async fn finish_the_command_in_hand(&mut self) {
+    async fn finish_the_command_in_hand(&mut self, waited: Duration) {
         if self.answering.is_finished() {
             return;
         }
-        let waited = LONGEST_WAIT_FOR_THE_COMMAND_IN_HAND;
         match tokio::time::timeout(waited, &mut self.answering).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -246,12 +282,17 @@ impl Probes {
         }
     }
 
-    async fn stop(self) -> anyhow::Result<()> {
+    async fn stop(self, longest_wait: Duration) -> anyhow::Result<()> {
         self.shutdown.cancel();
-        match self.serving {
-            Some(serving) => Ok(serving.await??),
-            None => Ok(()),
+        let Some(mut serving) = self.serving else {
+            return Ok(());
+        };
+        if let Ok(exit) = tokio::time::timeout(longest_wait, &mut serving).await {
+            return Ok(exit??);
         }
+        tracing::warn!(?longest_wait, "the http server did not shut down in time");
+        serving.abort();
+        Ok(())
     }
 }
 

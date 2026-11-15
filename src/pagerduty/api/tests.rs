@@ -666,6 +666,34 @@ async fn an_error_answer_without_errors_is_a_rejection_carrying_its_message() {
 }
 
 #[tokio::test]
+async fn an_error_that_only_repeats_the_message_is_said_once() {
+    for (errors, said) in [
+        (json!(["Schedule not found"]), "Schedule not found"),
+        (
+            json!(["Schedule not found", "Schedule not found"]),
+            "Schedule not found",
+        ),
+        (
+            json!(["Schedule not found", "Check its id"]),
+            "Schedule not found: Check its id",
+        ),
+    ] {
+        let answer = get("/users").respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "error": { "message": "Schedule not found", "code": 2100, "errors": errors },
+        })));
+        let (_server, api) = pagerduty_answering(answer).await;
+
+        let error = api.users().await.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("pagerduty rejected the request (404 Not Found): {said}"),
+            "{errors}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_failing_answer_of_another_shape_is_a_rejection_carrying_the_reason_phrase() {
     let answer = get("/oncalls")
         .respond_with(ResponseTemplate::new(502).set_body_string("<html>bad gateway</html>"));

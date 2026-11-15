@@ -98,10 +98,15 @@ fn id_of_its<'a>(entry: &'a serde_json::Value, reference: &str) -> &'a str {
 
 impl Refusal {
     fn reason(self) -> String {
-        if self.errors.is_empty() {
+        let beyond_the_message: Vec<String> = self
+            .errors
+            .into_iter()
+            .filter(|error| *error != self.message)
+            .collect();
+        if beyond_the_message.is_empty() {
             self.message
         } else {
-            format!("{}: {}", self.message, self.errors.join("; "))
+            format!("{}: {}", self.message, beyond_the_message.join("; "))
         }
     }
 }

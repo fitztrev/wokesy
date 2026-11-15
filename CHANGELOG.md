@@ -4,6 +4,22 @@ Rendered by [git-cliff](https://git-cliff.org) from the conventional commits
 behind each tag. `release` rewrites this file in full on every release, so an
 edit made here is lost — edit the commit messages instead.
 
+## v0.4.0 — 2026-11-15
+
+### Features
+
+- **status**: post every run's status in one wokesy status topic ([ac2ff9b](https://github.com/lakinwecker/wokesy/commit/ac2ff9b340fdb8ecaf7c75ad387ec0b5e19b5968))
+- **zulip**: add a check mark reaction to a message ([2ded878](https://github.com/lakinwecker/wokesy/commit/2ded878dfdf41d2ca1c3e9a6f816cf286d329870))
+- **wake**: acknowledge a change with a check mark instead of a reply ([af4b6ef](https://github.com/lakinwecker/wokesy/commit/af4b6ef20af11173cb628b7b6fd3eb8e5942a864))
+
+### Documentation
+
+- describe the check mark that answers a change ([698bb15](https://github.com/lakinwecker/wokesy/commit/698bb15f1aa25bfbc13d79b0b93c2841392cdfa4))
+
+### Tooling
+
+- **deploy**: deploy production 0.3.0 ([e475e4b](https://github.com/lakinwecker/wokesy/commit/e475e4be171019bd3a74db11eb7f3bcb12b4e873))
+
 ## v0.3.0 — 2026-11-15
 
 ### Features

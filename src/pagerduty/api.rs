@@ -19,6 +19,7 @@ pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION_2: &str = "application/vnd.pagerduty+json;version=2";
 const PAGE_SIZE: usize = 100;
 const NO_REASON: &str = "no reason given";
+const NO_ID: &str = "unknown";
 
 #[derive(Clone, Debug)]
 pub struct Api {
@@ -63,6 +64,36 @@ struct Page<T> {
 #[derive(Deserialize)]
 struct Reference<I> {
     id: I,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Entry<T> {
+    Read(T),
+    Unreadable(serde_json::Value),
+}
+
+impl<T> Entry<T> {
+    fn read_or_else(self, skip: impl FnOnce(&serde_json::Value)) -> Option<T> {
+        match self {
+            Self::Read(read) => Some(read),
+            Self::Unreadable(entry) => {
+                skip(&entry);
+                None
+            }
+        }
+    }
+}
+
+fn id_of(entry: &serde_json::Value) -> &str {
+    entry
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(NO_ID)
+}
+
+fn id_of_its<'a>(entry: &'a serde_json::Value, reference: &str) -> &'a str {
+    entry.get(reference).map_or(NO_ID, id_of)
 }
 
 impl Refusal {

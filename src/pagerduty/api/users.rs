@@ -3,11 +3,11 @@ use serde::Deserialize;
 use crate::pagerduty::{User, UserId};
 use crate::people::{Email, Name};
 
-use super::{Api, ApiError};
+use super::{Api, ApiError, Entry, id_of};
 
 #[derive(Deserialize)]
 struct UsersAnswer {
-    users: Vec<UserAnswer>,
+    users: Vec<Entry<UserAnswer>>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +33,14 @@ impl Api {
         Ok(pages
             .into_iter()
             .flat_map(|page| page.users)
+            .filter_map(|user| {
+                user.read_or_else(|unreadable| {
+                    tracing::warn!(
+                        user = id_of(unreadable),
+                        "pagerduty user that cannot be read skipped"
+                    );
+                })
+            })
             .map(User::from)
             .collect())
     }

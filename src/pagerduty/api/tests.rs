@@ -13,6 +13,7 @@ use crate::pagerduty::{
     OnCall, OverrideId, ScheduleId, ScheduleName, ScheduleRef, Target, User, UserId, UserRef,
 };
 use crate::people::{Email, Name};
+use crate::testing::Logs;
 
 fn api_at(base_url: &str) -> Api {
     let config = Config {
@@ -305,6 +306,175 @@ async fn an_on_call_entry_without_a_schedule_or_an_end_is_a_directly_targeted_pe
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn a_user_whose_name_or_email_cannot_be_used_is_skipped_and_the_others_are_read() {
+    let (logs, _listening) = Logs::listen();
+    let answer = get("/users").respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        "users": [
+            { "id": "PGOOD01", "name": "Earline Greenholt", "email": "e@example.com" },
+            { "id": "PBAD001", "name": "  ", "email": "nameless@example.com" },
+            { "id": "PBAD002", "name": "Mallory Example", "email": "not-an-address" },
+            { "id": "PBAD003", "name": "Nobody Example", "email": null },
+            { "id": "PGOOD02", "name": "Aurelio Rice", "email": "a@example.com" },
+        ],
+        "more": false,
+    })));
+    let (_server, api) = pagerduty_answering(answer).await;
+
+    let users = api.users().await.unwrap();
+
+    let ids: Vec<&str> = users.iter().map(|user| user.id.as_str()).collect();
+    let logged = logs.text();
+    assert_eq!(ids, ["PGOOD01", "PGOOD02"]);
+    for skipped in ["PBAD001", "PBAD002", "PBAD003"] {
+        assert!(
+            logged.contains(&format!(
+                "user that cannot be read skipped user=\"{skipped}\""
+            )),
+            "{logged}"
+        );
+    }
+    for secret in ["Mallory", "Nobody", "not-an-address", "example.com"] {
+        assert!(!logged.contains(secret), "{secret} is in {logged}");
+    }
+}
+
+#[tokio::test]
+async fn an_on_call_entry_without_a_user_is_skipped_and_the_others_are_read() {
+    let (logs, _listening) = Logs::listen();
+    let engineering =
+        json!({ "id": "PT20YPA", "type": "escalation_policy_reference", "summary": "Engineering" });
+    let request = get("/oncalls").respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        "oncalls": [
+            {
+                "escalation_policy": engineering,
+                "escalation_level": 1,
+                "schedule": { "id": "PI7DH85", "type": "schedule_reference", "summary": "Daily Rotation" },
+                "user": null,
+                "start": null,
+                "end": null,
+            },
+            {
+                "escalation_policy": engineering,
+                "escalation_level": 2,
+                "schedule": null,
+                "user": { "id": "PEYSGVF", "type": "user_reference", "summary": "PagerDuty Admin" },
+                "start": null,
+                "end": null,
+            },
+        ],
+        "more": false,
+    })));
+    let (_server, api) = pagerduty_answering(request).await;
+
+    let oncalls = api.oncalls().await.unwrap();
+
+    let logged = logs.text();
+    assert_eq!(
+        oncalls,
+        [OnCall {
+            escalation_policy: EscalationPolicyId::try_new("PT20YPA").unwrap(),
+            level: EscalationLevel::new(2),
+            schedule: None,
+            user: user("PEYSGVF", "PagerDuty Admin"),
+            end: None,
+        }]
+    );
+    assert!(
+        logged.contains(
+            "on-call entry that cannot be read skipped escalation_policy=\"PT20YPA\" schedule=\"PI7DH85\" user=\"unknown\""
+        ),
+        "{logged}"
+    );
+    assert!(
+        !logged.contains("Engineering") && !logged.contains("Daily Rotation"),
+        "{logged}"
+    );
+}
+
+#[tokio::test]
+async fn a_target_of_an_unknown_type_is_skipped_and_the_rest_of_its_policy_is_read() {
+    let (logs, _listening) = Logs::listen();
+    let answer = get("/escalation_policies").respond_with(ResponseTemplate::new(200).set_body_json(
+        json!({
+            "escalation_policies": [
+                {
+                    "id": "PANZZEQ",
+                    "name": "Engineering",
+                    "escalation_rules": [{
+                        "targets": [
+                            { "id": "PTEAM01", "type": "team_reference", "summary": "Platform team" },
+                            { "id": "PI7DH85", "type": "schedule_reference", "summary": "Daily Rotation" },
+                        ],
+                    }],
+                    "services": [{ "id": "PIJ90N7", "type": "service_reference", "summary": "Mail" }],
+                },
+                { "id": "PNONAME", "name": "", "escalation_rules": [], "services": [] },
+                { "id": "PT20YPA", "name": "Unused", "escalation_rules": [], "services": [] },
+            ],
+            "more": false,
+        }),
+    ));
+    let (_server, api) = pagerduty_answering(answer).await;
+
+    let policies = api.escalation_policies().await.unwrap();
+
+    let logged = logs.text();
+    assert_eq!(
+        policies,
+        [
+            EscalationPolicy {
+                id: EscalationPolicyId::try_new("PANZZEQ").unwrap(),
+                name: EscalationPolicyName::try_new("Engineering").unwrap(),
+                rules: vec![EscalationRule {
+                    targets: vec![Target::Schedule(schedule("PI7DH85", "Daily Rotation"))],
+                }],
+                in_use: true,
+            },
+            EscalationPolicy {
+                id: EscalationPolicyId::try_new("PT20YPA").unwrap(),
+                name: EscalationPolicyName::try_new("Unused").unwrap(),
+                rules: vec![],
+                in_use: false,
+            },
+        ]
+    );
+    assert!(
+        logged.contains(
+            "escalation target that cannot be read skipped escalation_policy=PANZZEQ target=\"PTEAM01\""
+        ),
+        "{logged}"
+    );
+    assert!(
+        logged.contains(
+            "escalation policy that cannot be read skipped escalation_policy=\"PNONAME\""
+        ),
+        "{logged}"
+    );
+    assert!(!logged.contains("Platform team"), "{logged}");
+}
+
+#[tokio::test]
+async fn a_list_that_is_not_a_list_of_records_is_unreadable() {
+    for users in [json!({ "id": "PXPGF42" }), json!("PXPGF42"), json!(null)] {
+        let answer = get("/users").respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "users": users, "more": false })),
+        );
+        let (_server, api) = pagerduty_answering(answer).await;
+
+        assert!(
+            matches!(
+                api.users().await,
+                Err(ApiError::Unreadable {
+                    status: StatusCode::OK,
+                    ..
+                })
+            ),
+            "{users}"
+        );
+    }
 }
 
 fn create_override() -> MockBuilder {

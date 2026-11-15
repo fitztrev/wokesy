@@ -7,11 +7,11 @@ use crate::pagerduty::{
 };
 use crate::people::Name;
 
-use super::{Api, ApiError};
+use super::{Api, ApiError, Entry, id_of};
 
 #[derive(Deserialize)]
 struct EscalationPoliciesAnswer {
-    escalation_policies: Vec<EscalationPolicyAnswer>,
+    escalation_policies: Vec<Entry<EscalationPolicyAnswer>>,
 }
 
 #[derive(Deserialize)]
@@ -24,7 +24,7 @@ struct EscalationPolicyAnswer {
 
 #[derive(Deserialize)]
 struct EscalationRuleAnswer {
-    targets: Vec<TargetAnswer>,
+    targets: Vec<Entry<TargetAnswer>>,
 }
 
 #[derive(Deserialize)]
@@ -41,24 +41,37 @@ enum TargetAnswer {
 
 impl From<EscalationPolicyAnswer> for EscalationPolicy {
     fn from(answer: EscalationPolicyAnswer) -> Self {
+        let rules = answer
+            .escalation_rules
+            .into_iter()
+            .map(|rule| rule.read_for(&answer.id))
+            .collect();
         Self {
             id: answer.id,
             name: answer.name,
-            rules: answer
-                .escalation_rules
-                .into_iter()
-                .map(EscalationRule::from)
-                .collect(),
+            rules,
             in_use: !answer.services.is_empty(),
         }
     }
 }
 
-impl From<EscalationRuleAnswer> for EscalationRule {
-    fn from(answer: EscalationRuleAnswer) -> Self {
-        Self {
-            targets: answer.targets.into_iter().map(Target::from).collect(),
-        }
+impl EscalationRuleAnswer {
+    fn read_for(self, policy: &EscalationPolicyId) -> EscalationRule {
+        let targets = self
+            .targets
+            .into_iter()
+            .filter_map(|target| {
+                target.read_or_else(|unreadable| {
+                    tracing::warn!(
+                        escalation_policy = %policy,
+                        target = id_of(unreadable),
+                        "pagerduty escalation target that cannot be read skipped"
+                    );
+                })
+            })
+            .map(Target::from)
+            .collect();
+        EscalationRule { targets }
     }
 }
 
@@ -80,6 +93,14 @@ impl Api {
         Ok(pages
             .into_iter()
             .flat_map(|page| page.escalation_policies)
+            .filter_map(|policy| {
+                policy.read_or_else(|unreadable| {
+                    tracing::warn!(
+                        escalation_policy = id_of(unreadable),
+                        "pagerduty escalation policy that cannot be read skipped"
+                    );
+                })
+            })
             .map(EscalationPolicy::from)
             .collect())
     }

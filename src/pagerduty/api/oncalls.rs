@@ -4,13 +4,13 @@ use time::OffsetDateTime;
 use crate::pagerduty::{EscalationLevel, EscalationPolicyId, OnCall, ScheduleId, UserId, UserRef};
 use crate::people::Name;
 
-use super::{Api, ApiError, Reference};
+use super::{Api, ApiError, Entry, Reference, id_of_its};
 
 const ONLY_THE_EARLIEST: [(&str, &str); 1] = [("earliest", "true")];
 
 #[derive(Deserialize)]
 struct OnCallsAnswer {
-    oncalls: Vec<OnCallAnswer>,
+    oncalls: Vec<Entry<OnCallAnswer>>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +50,16 @@ impl Api {
         Ok(pages
             .into_iter()
             .flat_map(|page| page.oncalls)
+            .filter_map(|on_call| {
+                on_call.read_or_else(|unreadable| {
+                    tracing::warn!(
+                        escalation_policy = id_of_its(unreadable, "escalation_policy"),
+                        schedule = id_of_its(unreadable, "schedule"),
+                        user = id_of_its(unreadable, "user"),
+                        "pagerduty on-call entry that cannot be read skipped"
+                    );
+                })
+            })
             .map(OnCall::from)
             .collect())
     }

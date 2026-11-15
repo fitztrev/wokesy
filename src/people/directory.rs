@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::links::Links;
 use super::members::ChatMember;
@@ -60,9 +60,24 @@ impl Directory {
     /// ```
     #[must_use]
     pub fn matching(users: &[User], members: &[ChatMember], links: &Links) -> Self {
+        let surely: Vec<Option<Match<'_>>> = users
+            .iter()
+            .map(|user| surely_matched(user, members, links))
+            .collect();
+        let claimed: BTreeSet<ChatUserId> = surely
+            .iter()
+            .flatten()
+            .map(|matched| matched.chat_user)
+            .collect();
         let mut matches: Vec<Match<'_>> = users
             .iter()
-            .filter_map(|user| matched(user, members, links))
+            .zip(surely)
+            .filter_map(|(user, sure)| {
+                sure.or_else(|| {
+                    matched_by_name(user, members)
+                        .filter(|matched| !claimed.contains(&matched.chat_user))
+                })
+            })
             .collect();
         matches.sort_by_key(|matched| (matched.chat_user, matched.by));
         Self {
@@ -98,7 +113,7 @@ impl Directory {
     }
 }
 
-fn matched<'a>(user: &'a User, members: &[ChatMember], links: &Links) -> Option<Match<'a>> {
+fn surely_matched<'a>(user: &'a User, members: &[ChatMember], links: &Links) -> Option<Match<'a>> {
     let by = |by, chat_user| Match {
         user,
         chat_user,
@@ -111,10 +126,14 @@ fn matched<'a>(user: &'a User, members: &[ChatMember], links: &Links) -> Option<
             only(members.iter().filter(|member| has_email_of(member, user)))
                 .map(|member| by(MatchedBy::Email, member.id))
         })
-        .or_else(|| {
-            only(members.iter().filter(|member| has_name_of(member, user)))
-                .map(|member| by(MatchedBy::FullName, member.id))
-        })
+}
+
+fn matched_by_name<'a>(user: &'a User, members: &[ChatMember]) -> Option<Match<'a>> {
+    only(members.iter().filter(|member| has_name_of(member, user))).map(|member| Match {
+        user,
+        chat_user: member.id,
+        by: MatchedBy::FullName,
+    })
 }
 
 fn has_email_of(member: &ChatMember, user: &User) -> bool {

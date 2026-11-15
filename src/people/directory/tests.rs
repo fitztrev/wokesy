@@ -176,7 +176,7 @@ fn a_chat_user_leads_back_to_the_pagerduty_user_matched_to_it() {
 }
 
 #[test]
-fn a_chat_user_matched_to_two_pagerduty_users_leads_back_to_the_one_matched_by_the_earlier_rule() {
+fn a_member_matched_by_a_link_or_by_email_is_not_matched_to_another_pagerduty_user_by_name() {
     let linked = user("PZZZZZ9", "Alice Example", "alice@example.com");
     let by_email = user("PMMMMM5", "Alice Example", "alice@lichess.example.com");
     let by_name = user("PAAAAA1", "Alice Example", "alice@old.example.com");
@@ -192,15 +192,57 @@ fn a_chat_user_matched_to_two_pagerduty_users_leads_back_to_the_one_matched_by_t
         &members,
         &Links::default(),
     );
+    let alone = Directory::matching(std::slice::from_ref(&by_name), &members, &Links::default());
 
-    for user in [&linked, &by_email, &by_name] {
-        assert_eq!(everyone.chat_user_of(&user.id), Some(ChatUserId(12)));
-    }
+    assert_eq!(everyone.chat_user_of(&linked.id), Some(ChatUserId(12)));
+    assert_eq!(everyone.chat_user_of(&by_email.id), Some(ChatUserId(12)));
+    assert_eq!(everyone.chat_user_of(&by_name.id), None);
     assert_eq!(everyone.pagerduty_user_of(ChatUserId(12)), Some(&linked));
+    assert_eq!(
+        without_a_link.chat_user_of(&by_email.id),
+        Some(ChatUserId(12))
+    );
+    assert_eq!(without_a_link.chat_user_of(&by_name.id), None);
     assert_eq!(
         without_a_link.pagerduty_user_of(ChatUserId(12)),
         Some(&by_email)
     );
+    assert_eq!(alone.chat_user_of(&by_name.id), Some(ChatUserId(12)));
+}
+
+#[test]
+fn a_member_linked_to_one_pagerduty_user_is_not_matched_to_another_who_has_its_name() {
+    let linked = user("PALICE1", "Alice Example", "alice@example.com");
+    let namesake = user("PALICE2", "Al", "al@example.com");
+    let members = [member(12, "Al", &["user12@zulip.example.com"])];
+
+    let directory = Directory::matching(
+        &[namesake.clone(), linked.clone()],
+        &members,
+        &links("alice@example.com=12"),
+    );
+
+    assert_eq!(directory.chat_user_of(&namesake.id), None);
+    assert_eq!(directory.pagerduty_user_of(ChatUserId(12)), Some(&linked));
+}
+
+#[test]
+fn a_claimed_member_sharing_the_name_with_another_still_leaves_the_name_ambiguous() {
+    let by_email = user("PALICE1", "Alice Example", "alice@example.com");
+    let by_name = user("PALICE2", "Alice Example", "alice@old.example.com");
+    let members = [
+        member(12, "Alice Example", &["alice@example.com"]),
+        member(13, "Alice Example", &["user13@zulip.example.com"]),
+    ];
+
+    let directory = Directory::matching(
+        &[by_email.clone(), by_name.clone()],
+        &members,
+        &Links::default(),
+    );
+
+    assert_eq!(directory.chat_user_of(&by_email.id), Some(ChatUserId(12)));
+    assert_eq!(directory.chat_user_of(&by_name.id), None);
 }
 
 #[test]

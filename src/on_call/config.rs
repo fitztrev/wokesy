@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use super::chosen_policies::ChosenPolicies;
 use crate::chat::{ChannelName, Conversation, TopicName};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -9,12 +10,14 @@ use crate::chat::{ChannelName, Conversation, TopicName};
 pub struct Config {
     #[serde(with = "humantime_serde")]
     pub refresh_interval: Duration,
+    pub escalation_policies: ChosenPolicies,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             refresh_interval: Duration::from_mins(1),
+            escalation_policies: ChosenPolicies::default(),
         }
     }
 }

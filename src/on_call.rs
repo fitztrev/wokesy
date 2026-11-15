@@ -1,5 +1,6 @@
 mod announcing;
 mod changes;
+mod chosen_policies;
 mod config;
 mod rendering;
 mod roster;
@@ -8,6 +9,7 @@ mod sync;
 mod testing;
 
 pub use announcing::keep_announcing;
+pub use chosen_policies::ChosenPolicies;
 pub use config::{Announcements, Config};
 pub use rendering::{name_in_chat, on_call_now, policy_in_chat, schedule_in_chat};
 pub use roster::{Level, Policy, Roster, Shift};

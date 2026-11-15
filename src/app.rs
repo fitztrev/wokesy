@@ -127,9 +127,9 @@ impl Jobs {
             )),
             sync: tokio::spawn(on_call::keep_in_sync(
                 pagerduty,
+                config.on_call.clone(),
                 roster,
                 refresh,
-                config.on_call.refresh_interval,
             )),
             announcing: tokio::spawn(on_call::keep_announcing(
                 messenger.clone(),

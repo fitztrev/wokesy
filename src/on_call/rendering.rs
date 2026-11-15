@@ -58,10 +58,10 @@ fn bold(name: &str) -> String {
 }
 
 /// ```
-/// use wokesy::on_call::{Roster, on_call_now};
+/// use wokesy::on_call::{ChosenPolicies, Roster, on_call_now};
 /// use wokesy::people::{Directory, Links};
 ///
-/// let nobody_to_call = Roster::new(vec![], vec![]);
+/// let nobody_to_call = Roster::new(vec![], vec![], &ChosenPolicies::default());
 /// let directory = Directory::matching(&[], &[], &Links::default());
 ///
 /// assert_eq!(

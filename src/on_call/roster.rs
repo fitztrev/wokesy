@@ -3,6 +3,7 @@ use std::collections::btree_map::Entry;
 
 use time::OffsetDateTime;
 
+use super::chosen_policies::ChosenPolicies;
 use crate::pagerduty::{
     EscalationLevel, EscalationPolicy, EscalationPolicyId, EscalationPolicyName, EscalationRule,
     OnCall, ScheduleRef, Target, UserId, UserRef,
@@ -40,24 +41,36 @@ type ShiftsByLevel = BTreeMap<(EscalationPolicyId, EscalationLevel), BTreeMap<Us
 
 impl Roster {
     /// ```
-    /// use wokesy::on_call::Roster;
+    /// use wokesy::on_call::{ChosenPolicies, Roster};
     /// use wokesy::pagerduty::{EscalationPolicy, EscalationPolicyId, EscalationPolicyName};
     ///
-    /// let no_service_uses_it = EscalationPolicy {
-    ///     id: EscalationPolicyId::try_new("PANZZEQ").unwrap(),
+    /// let policy = |id: &str, in_use: bool| EscalationPolicy {
+    ///     id: EscalationPolicyId::try_new(id).unwrap(),
     ///     name: EscalationPolicyName::try_new("Engineering").unwrap(),
     ///     rules: vec![],
-    ///     in_use: false,
+    ///     in_use,
     /// };
+    /// let in_use = |roster: Roster| -> Vec<String> {
+    ///     roster.policies.iter().map(|policy| policy.id.to_string()).collect()
+    /// };
+    /// let policies = || vec![policy("PANZZEQ", true), policy("PT20YPA", true), policy("PUNUSED", false)];
     ///
-    /// assert_eq!(Roster::new(vec![no_service_uses_it], vec![]), Roster { policies: vec![] });
+    /// let every = Roster::new(policies(), vec![], &ChosenPolicies::default());
+    /// let chosen = Roster::new(policies(), vec![], &"PT20YPA, PUNUSED".into());
+    ///
+    /// assert_eq!(in_use(every), ["PANZZEQ", "PT20YPA"]);
+    /// assert_eq!(in_use(chosen), ["PT20YPA"]);
     /// ```
     #[must_use]
-    pub fn new(policies: Vec<EscalationPolicy>, oncalls: Vec<OnCall>) -> Self {
+    pub fn new(
+        policies: Vec<EscalationPolicy>,
+        oncalls: Vec<OnCall>,
+        chosen: &ChosenPolicies,
+    ) -> Self {
         let mut shifts = shifts_by_level(oncalls);
         let mut policies: Vec<Policy> = policies
             .into_iter()
-            .filter(|policy| policy.in_use)
+            .filter(|policy| policy.in_use && chosen.include(&policy.id))
             .map(|policy| Policy::of(policy, &mut shifts))
             .collect();
         policies.sort_by(|one, other| (&one.name, &one.id).cmp(&(&other.name, &other.id)));
@@ -65,7 +78,7 @@ impl Roster {
     }
 
     /// ```
-    /// use wokesy::on_call::Roster;
+    /// use wokesy::on_call::{ChosenPolicies, Roster};
     /// use wokesy::pagerduty::{
     ///     EscalationPolicy, EscalationPolicyId, EscalationPolicyName, EscalationRule, ScheduleId,
     ///     ScheduleName, ScheduleRef, Target,
@@ -85,7 +98,7 @@ impl Roster {
     ///     in_use: true,
     /// };
     ///
-    /// let roster = Roster::new(vec![policy], vec![]);
+    /// let roster = Roster::new(vec![policy], vec![], &ChosenPolicies::default());
     ///
     /// assert_eq!(roster.first_line_schedules(), [schedule("PI7DH85", "Primary rota")]);
     /// ```

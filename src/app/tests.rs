@@ -79,6 +79,7 @@ fn settings(pagerduty: &FakePagerDuty, zulip: &FakeZulip) -> Config {
         },
         on_call: on_call::Config {
             refresh_interval: LONGER_THAN_A_TEST,
+            ..on_call::Config::default()
         },
         people: people::Config {
             refresh_interval: LONGER_THAN_A_TEST,

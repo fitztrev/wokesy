@@ -1,26 +1,27 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{Notify, watch};
 use tokio::time::MissedTickBehavior;
 
+use super::chosen_policies::ChosenPolicies;
+use super::config::Config;
 use super::roster::Roster;
 use crate::pagerduty;
 
 pub async fn keep_in_sync(
     pagerduty: pagerduty::Api,
+    config: Config,
     roster: watch::Sender<Option<Roster>>,
     refresh: Arc<Notify>,
-    interval: Duration,
 ) {
-    let mut refreshes = tokio::time::interval(interval);
+    let mut refreshes = tokio::time::interval(config.refresh_interval);
     refreshes.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = refreshes.tick() => {}
             () = refresh.notified() => {}
         }
-        match read(&pagerduty).await {
+        match read(&pagerduty, &config.escalation_policies).await {
             Ok(read) => publish(&roster, read),
             Err(error) => {
                 tracing::warn!(error = %error, cause = ?std::error::Error::source(&error), "keeping the previous roster");
@@ -29,7 +30,10 @@ pub async fn keep_in_sync(
     }
 }
 
-async fn read(pagerduty: &pagerduty::Api) -> Result<Roster, pagerduty::ApiError> {
+async fn read(
+    pagerduty: &pagerduty::Api,
+    chosen: &ChosenPolicies,
+) -> Result<Roster, pagerduty::ApiError> {
     let (policies, oncalls) =
         tokio::try_join!(pagerduty.escalation_policies(), pagerduty.oncalls())?;
     tracing::debug!(
@@ -37,7 +41,7 @@ async fn read(pagerduty: &pagerduty::Api) -> Result<Roster, pagerduty::ApiError>
         oncalls = oncalls.len(),
         "read the escalation policies and who is on call"
     );
-    Ok(Roster::new(policies, oncalls))
+    Ok(Roster::new(policies, oncalls, chosen))
 }
 
 fn publish(roster: &watch::Sender<Option<Roster>>, read: Roster) {

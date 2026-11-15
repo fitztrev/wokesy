@@ -57,13 +57,17 @@ fn backup() -> ScheduleRef {
     schedule("PI7DH86", "Backup rota")
 }
 
+fn roster_of(policies: Vec<EscalationPolicy>, oncalls: Vec<OnCall>) -> Roster {
+    Roster::new(policies, oncalls, &ChosenPolicies::default())
+}
+
 fn shifts_of(roster: &Roster, policy: usize, level: usize) -> Vec<Shift> {
     roster.policies[policy].levels[level].shifts.clone()
 }
 
 #[test]
 fn only_policies_a_service_uses_are_in_the_roster() {
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![
             unused(escalation_policy("PUNUSED", "Abandoned", &[&[]])),
             escalation_policy("PLICHES", "Lichess", &[&[]]),
@@ -95,8 +99,40 @@ fn only_policies_a_service_uses_are_in_the_roster() {
 }
 
 #[test]
-fn policies_are_sorted_by_name_then_by_id() {
+fn with_policies_chosen_only_those_among_the_policies_in_use_are_in_the_roster() {
     let roster = Roster::new(
+        vec![
+            escalation_policy("PLICHES", "Lichess", &[&[]]),
+            escalation_policy("PMODERA", "Moderation", &[&[]]),
+            unused(escalation_policy("PUNUSED", "Abandoned", &[&[]])),
+            escalation_policy("PFISHNE", "Fishnet", &[&[]]),
+        ],
+        vec![
+            on_call("PLICHES", 1, alice(), None),
+            on_call("PMODERA", 1, bob(), None),
+            on_call("PUNUSED", 1, carol(), None),
+        ],
+        &ChosenPolicies::from("PUNUSED, PMODERA, PGONE01, PFISHNE"),
+    );
+
+    let ids: Vec<&str> = roster
+        .policies
+        .iter()
+        .map(|policy| policy.id.as_str())
+        .collect();
+    assert_eq!(ids, ["PFISHNE", "PMODERA"]);
+    assert_eq!(
+        shifts_of(&roster, 1, 0),
+        [Shift {
+            user: bob(),
+            ends: None
+        }]
+    );
+}
+
+#[test]
+fn policies_are_sorted_by_name_then_by_id() {
+    let roster = roster_of(
         vec![
             escalation_policy("PZZZZZ9", "Moderation", &[]),
             escalation_policy("PBBBBB2", "Lichess", &[]),
@@ -115,7 +151,7 @@ fn policies_are_sorted_by_name_then_by_id() {
 
 #[test]
 fn levels_follow_the_rules_in_order_and_are_numbered_from_one() {
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![escalation_policy(
             "PLICHES",
             "Lichess",
@@ -160,7 +196,7 @@ fn levels_follow_the_rules_in_order_and_are_numbered_from_one() {
 
 #[test]
 fn the_shifts_of_a_level_are_the_people_on_call_at_that_level_of_that_policy_sorted_by_user_id() {
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![
             escalation_policy("PLICHES", "Lichess", &[&[], &[]]),
             escalation_policy("PMODERA", "Moderation", &[&[]]),
@@ -205,7 +241,7 @@ fn the_shifts_of_a_level_are_the_people_on_call_at_that_level_of_that_policy_sor
 #[test]
 fn a_person_listed_twice_at_a_level_appears_once_with_the_later_end() {
     for ends in [[EVENING, MIDNIGHT], [MIDNIGHT, EVENING]] {
-        let roster = Roster::new(
+        let roster = roster_of(
             vec![escalation_policy("PLICHES", "Lichess", &[&[]])],
             ends.into_iter()
                 .map(|end| on_call("PLICHES", 1, alice(), Some(end)))
@@ -225,7 +261,7 @@ fn a_person_listed_twice_at_a_level_appears_once_with_the_later_end() {
 #[test]
 fn no_end_is_later_than_any_end() {
     for ends in [[None, Some(MIDNIGHT)], [Some(MIDNIGHT), None]] {
-        let roster = Roster::new(
+        let roster = roster_of(
             vec![escalation_policy("PLICHES", "Lichess", &[&[]])],
             ends.into_iter()
                 .map(|end| on_call("PLICHES", 1, alice(), end))
@@ -244,7 +280,7 @@ fn no_end_is_later_than_any_end() {
 
 #[test]
 fn someone_on_call_at_a_level_the_policy_has_no_rule_for_is_left_out() {
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![escalation_policy("PLICHES", "Lichess", &[&[]])],
         vec![
             on_call("PLICHES", 2, alice(), None),
@@ -260,7 +296,7 @@ fn someone_on_call_at_a_level_the_policy_has_no_rule_for_is_left_out() {
 #[test]
 fn the_first_line_schedules_are_those_at_level_one_of_every_policy_each_once_in_roster_order() {
     let weekend = schedule("PI7DH87", "Weekend rota");
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![
             escalation_policy(
                 "PMODERA",
@@ -299,7 +335,7 @@ fn the_first_line_schedules_are_those_at_level_one_of_every_policy_each_once_in_
 
 #[test]
 fn a_roster_without_a_schedule_at_level_one_has_no_first_line_schedules() {
-    let roster = Roster::new(
+    let roster = roster_of(
         vec![escalation_policy(
             "PLICHES",
             "Lichess",

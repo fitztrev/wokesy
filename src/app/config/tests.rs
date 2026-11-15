@@ -6,6 +6,8 @@ use secrecy::ExposeSecret;
 use super::*;
 use crate::app::telemetry::LogFormat;
 use crate::chat::{ChannelName, ChatUserId};
+use crate::on_call::ChosenPolicies;
+use crate::pagerduty::EscalationPolicyId;
 use crate::people::{Email, Links};
 use crate::wake::Channels;
 
@@ -43,6 +45,10 @@ fn with_only_the_required_variables_set_every_other_setting_takes_its_default() 
         assert_eq!(config.zulip.inbox.max_backoff, Duration::from_mins(1));
         assert_eq!(config.announcements.topic.as_str(), "on call");
         assert_eq!(config.on_call.refresh_interval, Duration::from_mins(1));
+        assert_eq!(
+            config.on_call.escalation_policies,
+            ChosenPolicies::default()
+        );
         assert_eq!(config.people.links, Links::default());
         assert_eq!(config.people.refresh_interval, Duration::from_mins(5));
         assert_eq!(config.wake.longest, Duration::from_hours(7 * 24));
@@ -87,6 +93,7 @@ fn every_variable_a_deployment_can_set_is_recognized() {
         );
         jail.set_env("WOKESY_ANNOUNCEMENTS__TOPIC", "who is on call");
         jail.set_env("WOKESY_ON_CALL__REFRESH_INTERVAL", "30s");
+        jail.set_env("WOKESY_ON_CALL__ESCALATION_POLICIES", "PANZZEQ, PT20YPA");
         jail.set_env("WOKESY_PEOPLE__LINKS", "alice@example.com=12");
         jail.set_env("WOKESY_PEOPLE__REFRESH_INTERVAL", "10m");
         jail.set_env("WOKESY_WAKE__LONGEST", "2d");
@@ -130,6 +137,7 @@ fn a_misspelled_variable_in_any_section_is_rejected() {
         "WOKESY_PAGERDUTY__EVENTS__ROUTING_KEE",
         "WOKESY_ANNOUNCEMENTS__TOPIK",
         "WOKESY_ON_CALL__REFRESH",
+        "WOKESY_ON_CALL__ESCALATION_POLICY",
         "WOKESY_PEOPLE__LINK",
         "WOKESY_WAKE__LONGST",
         "WOKESY_WAKE__CHANNEL",
@@ -295,6 +303,37 @@ fn a_page_cooldown_that_is_not_a_duration_fails_loading() {
         in_clean_environment(|jail| {
             jail.set_env("WOKESY_WAKE__PAGE_COOLDOWN", cooldown);
             assert!(load(jail).is_err(), "{cooldown} was accepted");
+        });
+    }
+}
+
+#[test]
+fn without_escalation_policies_every_policy_is_chosen() {
+    let policy = EscalationPolicyId::try_new("PANZZEQ").unwrap();
+    in_clean_environment(|jail| {
+        let chosen = load(jail).unwrap().on_call.escalation_policies;
+        assert!(chosen.include(&policy));
+    });
+}
+
+#[test]
+fn escalation_policies_are_read_with_or_without_whitespace_between_them() {
+    let policy = |id: &str| EscalationPolicyId::try_new(id).unwrap();
+    for policies in [
+        "PANZZEQ, PT20YPA",
+        "PANZZEQ,PT20YPA",
+        " PANZZEQ ,, PT20YPA, ",
+    ] {
+        in_clean_environment(|jail| {
+            jail.set_env("WOKESY_ON_CALL__ESCALATION_POLICIES", policies);
+            let chosen = load(jail).unwrap().on_call.escalation_policies;
+            assert_eq!(
+                chosen,
+                ChosenPolicies::from("PANZZEQ,PT20YPA"),
+                "{policies}"
+            );
+            assert!(chosen.include(&policy("PT20YPA")), "{policies}");
+            assert!(!chosen.include(&policy("POTHER1")), "{policies}");
         });
     }
 }

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use time::macros::datetime;
@@ -168,7 +170,19 @@ impl Syncing {
     async fn start(
         policies: &[ResponseTemplate],
         oncalls: &[ResponseTemplate],
-        interval: Duration,
+        refresh_interval: Duration,
+    ) -> Self {
+        let config = Config {
+            refresh_interval,
+            ..Config::default()
+        };
+        Self::start_with(policies, oncalls, config).await
+    }
+
+    async fn start_with(
+        policies: &[ResponseTemplate],
+        oncalls: &[ResponseTemplate],
+        config: Config,
     ) -> Self {
         let pagerduty = MockServer::start().await;
         answers_in_turn(&pagerduty, ESCALATION_POLICIES, policies).await;
@@ -183,7 +197,7 @@ impl Syncing {
         );
         let (published, roster) = watch::channel(None);
         let refresh = Arc::new(Notify::new());
-        let task = tokio::spawn(keep_in_sync(api, published, Arc::clone(&refresh), interval));
+        let task = tokio::spawn(keep_in_sync(api, config, published, Arc::clone(&refresh)));
         Self {
             pagerduty,
             task,
@@ -234,6 +248,27 @@ async fn the_roster_read_from_pagerduty_is_published() {
     .await;
 
     assert_eq!(syncing.next_roster().await, with_alice_until_the_evening());
+}
+
+#[tokio::test]
+async fn only_the_chosen_escalation_policies_are_in_the_published_roster() {
+    for (chosen, published) in [
+        ("PLICHES, PGONE01", with_alice_until_the_evening()),
+        ("PUNUSED, PGONE01", Roster { policies: vec![] }),
+    ] {
+        let config = Config {
+            refresh_interval: RARELY,
+            escalation_policies: chosen.into(),
+        };
+        let mut syncing = Syncing::start_with(
+            &[lichess_and_an_unused_policy()],
+            &[alice_until_the_evening()],
+            config,
+        )
+        .await;
+
+        assert_eq!(syncing.next_roster().await, published, "{chosen}");
+    }
 }
 
 #[tokio::test]
